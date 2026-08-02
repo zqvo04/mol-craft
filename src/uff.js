@@ -1,4 +1,4 @@
-import { neighbors, bondOrderSum, bondBetween } from './model.js';
+import { neighbors, bondOrderSum, bondBetween, setDihedral } from './model.js';
 import { UFF_PARAMS } from './params.js';
 import { distance, angleDeg, dihedralDeg } from './geom.js';
 
@@ -284,4 +284,19 @@ export function minimize(mol, opts = {}) {
   }
 
   return { steps: s, energyBefore, energyAfter: e, converged, trajectory };
+}
+
+// 이면각 스캔. relax=false면 강체 회전(빠름), true면 스캔 좌표를 고정한 제약 최소화(느림).
+export function scanDihedral(mol, idx, { stepDeg = 10, relax = false } = {}) {
+  const snapshot = mol.atoms.map((a) => [...a.pos]);
+  const out = [];
+  for (let angle = -180; angle <= 180; angle += stepDeg) {
+    for (let i = 0; i < mol.atoms.length; i++) mol.atoms[i].pos = [...snapshot[i]];
+    if (!setDihedral(mol, idx, angle)) throw new Error('고리 결합은 스캔할 수 없습니다');
+    if (relax) minimize(mol, { maxSteps: 60, frozen: new Set(idx) });
+    out.push({ angle, energy: energy(mol).total });
+  }
+  for (let i = 0; i < mol.atoms.length; i++) mol.atoms[i].pos = [...snapshot[i]];
+  const min = Math.min(...out.map((p) => p.energy));
+  return out.map((p) => ({ ...p, relative: p.energy - min }));
 }
