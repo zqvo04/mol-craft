@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadPreset } from '../src/presets.js';
-import { minimize, energy, scanDihedral } from '../src/uff.js';
+import { minimize, energy, scanDihedral, typeAtom, buildTerms } from '../src/uff.js';
 import { measure, setDihedral } from '../src/model.js';
 
 const between = (x, lo, hi, label) =>
@@ -68,4 +68,29 @@ test('PCl5는 축-적도 90°만 검증한다 (UFF 한계 명시)', () => {
   const m = loadPreset('pcl5');
   minimize(m);
   between(measure(m, [1, 0, 4]), 84, 96, '적도-축 Cl-P-Cl');
+});
+
+test('부탄 프리셋에 수소가 있고 탄소가 C_3로 타입된다 (C_1 함정 회귀)', () => {
+  const m = loadPreset('butane');
+  const types = m.atoms.map((_, i) => typeAtom(m, i));
+  assert.ok(!types.includes('C_1'), '골격만 있으면 C_1(sp)로 타입되어 비틀림 항이 사라진다');
+  assert.ok(buildTerms(m).filter((t) => t.type === 'torsion').length > 0, '비틀림 항이 있어야 배좌 비교가 성립');
+});
+
+test('부탄 배좌: anti가 전역 최소, gauche는 ±60~80°의 국소 최소', () => {
+  const m = loadPreset('butane');
+  minimize(m);
+  const scan = scanDihedral(m, [0, 1, 2, 3], { stepDeg: 15, relax: true });
+  const at = (a) => scan.find((s) => s.angle === a).relative;
+  between(at(180), 0, 0.01, 'anti가 전역 최소여야 함');
+  // gauche 국소 최소: UFF는 실험값(65°, 0.9 kcal/mol)보다 각도가 크고 에너지가 높다.
+  const gauche = scan.filter((s, i, A) =>
+    i > 0 && i < A.length - 1 && s.angle > 0 && s.angle < 120
+    && s.relative < A[i - 1].relative && s.relative < A[i + 1].relative);
+  assert.equal(gauche.length, 1, 'gauche 극소가 정확히 하나 있어야 함');
+  between(gauche[0].angle, 55, 90, 'gauche 이면각');
+  between(gauche[0].relative, 0.5, 3, 'anti-gauche 에너지차');
+  // syn(0°)이 최고점. UFF는 실험값(~5)보다 과대평가하므로 상한을 넉넉히 둔다.
+  between(at(0), 6, 14, 'syn 장벽 (UFF 과대평가)');
+  assert.ok(at(0) > at(120), 'syn이 anti-gauche 전이 장벽보다 높아야 함');
 });
