@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { typeAtom, hybridization } from '../src/uff.js';
+import { typeAtom, hybridization, bondLength, buildTerms, energy } from '../src/uff.js';
 import { UFF_PARAMS } from '../src/params.js';
 
 function build(spec) {
@@ -80,4 +80,65 @@ test('hybridization은 theta0가 아니라 타입 이름으로 판정한다', ()
   assert.equal(hybridization('P_3+5'), 'sp3');
   assert.equal(hybridization('Si3'), 'sp3');
   assert.throws(() => hybridization('Xx_9'), /알 수 없는 UFF 타입/);
+});
+
+// 정사면체 메탄(C-H = 0.63*sqrt(3) ≈ 1.091 Å)
+function methane() {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  for (const p of [[0.63, 0.63, 0.63], [-0.63, -0.63, 0.63], [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63]])
+    addAtom(m, 'H', p);
+  for (let i = 1; i <= 4; i++) addBond(m, 0, i);
+  return m;
+}
+
+test('UFF 자연 결합 길이가 실측에 근접한다', () => {
+  assert.ok(Math.abs(bondLength('C_3', 'H_', 1) - 1.109) < 0.01, 'C-H');
+  assert.ok(Math.abs(bondLength('C_3', 'C_3', 1) - 1.514) < 0.01, 'C-C');
+  assert.ok(bondLength('C_2', 'C_2', 2) < bondLength('C_3', 'C_3', 1), '이중결합이 더 짧아야 함');
+});
+
+test('결합 항이 평형 길이에서 0, 늘리면 증가한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'H', [bondLength('C_3', 'H_', 1), 0, 0]);
+  // 메탄으로 만들어 C_3 타이핑을 유도
+  for (const p of [[-1, 0, 0], [0, 1, 0], [0, -1, 0]]) addAtom(m, 'H', p);
+  for (let i = 1; i <= 4; i++) addBond(m, 0, i);
+  const terms = buildTerms(m).filter((t) => t.type === 'bond' && t.atoms.includes(1));
+  assert.equal(terms.length, 1);
+  const e0 = terms[0].eval(m);
+  m.atoms[1].pos[0] += 0.1;
+  assert.ok(terms[0].eval(m) > e0 + 1, '0.1 Å 늘리면 눈에 띄게 증가해야 함');
+  assert.ok(e0 < 1e-6, '평형 길이에서는 거의 0');
+});
+
+test('항 종류별 개수가 맞다 (메탄)', () => {
+  const t = buildTerms(methane());
+  assert.equal(t.filter((x) => x.type === 'bond').length, 4);
+  assert.equal(t.filter((x) => x.type === 'angle').length, 6);   // C(4,2)
+  assert.equal(t.filter((x) => x.type === 'torsion').length, 0); // 중심 결합 없음
+  // H-H 6쌍은 전부 1-3(결합각)이라 vdW에서 제외된다.
+  assert.equal(t.filter((x) => x.type === 'vdw').length, 0);
+});
+
+test('vdW 항은 1-4 이상 떨어진 쌍에만 생긴다 (부탄 골격)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [-1.9, 0.55, 0]);
+  addAtom(m, 'C', [-0.75, -0.25, 0]);
+  addAtom(m, 'C', [0.75, 0.25, 0]);
+  addAtom(m, 'C', [1.9, -0.55, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2); addBond(m, 2, 3);
+  const vdw = buildTerms(m).filter((x) => x.type === 'vdw');
+  assert.equal(vdw.length, 1); // (0,3)만 남는다
+  assert.deepEqual(vdw[0].atoms, [0, 3]);
+});
+
+test('energy가 항별/원자별로 분해된다', () => {
+  const m = methane();
+  const e = energy(m);
+  assert.ok(Number.isFinite(e.total));
+  assert.ok(Math.abs(e.total - (e.byType.bond + e.byType.angle + e.byType.torsion + e.byType.vdw)) < 1e-9);
+  assert.ok(Math.abs(e.total - e.perAtom.reduce((a, b) => a + b, 0)) < 1e-9, 'perAtom 합 = total');
+  assert.equal(e.perBond.size, 4);
 });

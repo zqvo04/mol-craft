@@ -1,5 +1,6 @@
-import { neighbors, bondOrderSum } from './model.js';
+import { neighbors, bondOrderSum, bondBetween } from './model.js';
 import { UFF_PARAMS } from './params.js';
+import { distance, angleDeg, dihedralDeg } from './geom.js';
 
 // 원자 타입 결정: 원소 + 이웃 수 + 결합차수 합.
 // 방향족(C_R/N_R/O_R)은 별도 고리 인식이 필요하므로 여기서 자동 배정하지 않는다.
@@ -38,4 +39,182 @@ const HYB_BY_SUFFIX = { 1: 'sp', 2: 'sp2', R: 'sp2', 3: 'sp3' };
 export function hybridization(type) {
   if (!UFF_PARAMS[type]) throw new Error(`알 수 없는 UFF 타입: ${type}`);
   return HYB_BY_SUFFIX[type[2]] ?? 'sp';
+}
+
+const RAD = Math.PI / 180;
+const BETA = 664.12; // UFF 힘상수 스케일 (kcal/mol·Å)
+const LAMBDA = 0.1332; // 결합차수 보정 계수
+
+export function bondLength(ti, tj, order = 1) {
+  const a = UFF_PARAMS[ti], b = UFF_PARAMS[tj];
+  const rSum = a.r1 + b.r1;
+  const rBO = -LAMBDA * rSum * Math.log(order);
+  // 전기음성도 보정. 원 논문 부호 오타는 OpenBabel 관례대로 뺄셈으로 적용한다.
+  const dchi = Math.sqrt(a.chi) - Math.sqrt(b.chi);
+  const rEN = (a.r1 * b.r1 * dchi * dchi) / (a.chi * a.r1 + b.chi * b.r1);
+  return rSum + rBO - rEN;
+}
+
+function bondForceConstant(ti, tj, rij) {
+  return BETA * (UFF_PARAMS[ti].Z * UFF_PARAMS[tj].Z) / (rij ** 3);
+}
+
+function angleForceConstant(ti, tj, tk, rij, rjk, theta0) {
+  const t = theta0 * RAD;
+  const rik2 = rij * rij + rjk * rjk - 2 * rij * rjk * Math.cos(t);
+  const rik = Math.sqrt(rik2);
+  const c = Math.cos(t);
+  return BETA * (UFF_PARAMS[ti].Z * UFF_PARAMS[tk].Z) / (rik ** 5)
+       * rij * rjk * (3 * rij * rjk * (1 - c * c) - rik2 * c);
+}
+
+// 1-2, 1-3 쌍은 vdW에서 제외한다(결합/결합각 항이 이미 담당).
+function excludedPairs(mol) {
+  const ex = new Set();
+  const key = (i, j) => (i < j ? `${i}-${j}` : `${j}-${i}`);
+  for (const b of mol.bonds) ex.add(key(b.i, b.j));
+  for (let j = 0; j < mol.atoms.length; j++) {
+    const nb = neighbors(mol, j);
+    for (let a = 0; a < nb.length; a++)
+      for (let b = a + 1; b < nb.length; b++) ex.add(key(nb[a], nb[b]));
+  }
+  return ex;
+}
+
+export function buildTerms(mol) {
+  const types = mol.atoms.map((_, i) => typeAtom(mol, i));
+  const terms = [];
+
+  // --- 결합 신축: E = 0.5 k (r - r0)^2
+  for (const b of mol.bonds) {
+    const r0 = bondLength(types[b.i], types[b.j], b.order);
+    const k = bondForceConstant(types[b.i], types[b.j], r0);
+    terms.push({
+      type: 'bond', atoms: [b.i, b.j], r0, k,
+      eval(m) {
+        const d = distance(m.atoms[b.i].pos, m.atoms[b.j].pos) - r0;
+        return 0.5 * k * d * d;
+      },
+    });
+  }
+
+  // --- 결합각
+  for (let j = 0; j < mol.atoms.length; j++) {
+    const nb = neighbors(mol, j);
+    if (nb.length < 2) continue;
+    const theta0 = UFF_PARAMS[types[j]].theta0;
+    for (let a = 0; a < nb.length; a++) {
+      for (let c = a + 1; c < nb.length; c++) {
+        const i = nb[a], k2 = nb[c];
+        const rij = bondLength(types[i], types[j], bondBetween(mol, i, j).order);
+        const rjk = bondLength(types[j], types[k2], bondBetween(mol, j, k2).order);
+        const K = angleForceConstant(types[i], types[j], types[k2], rij, rjk, theta0);
+
+        // 특수 각도는 주기형, 그 외는 2차 푸리에 전개
+        let n = 0;
+        if (Math.abs(theta0 - 180) < 0.01) n = 1;
+        else if (Math.abs(theta0 - 120) < 0.01) n = 3;
+        else if (Math.abs(theta0 - 90) < 0.01) n = 4;
+
+        let evalFn;
+        if (n === 1) {
+          evalFn = (m) => K * (1 + Math.cos(angleDeg(m.atoms[i].pos, m.atoms[j].pos, m.atoms[k2].pos) * RAD));
+        } else if (n > 1) {
+          evalFn = (m) => (K / (n * n))
+            * (1 - Math.cos(n * angleDeg(m.atoms[i].pos, m.atoms[j].pos, m.atoms[k2].pos) * RAD));
+        } else {
+          const t = theta0 * RAD;
+          const C2 = 1 / (4 * Math.sin(t) ** 2);
+          const C1 = -4 * C2 * Math.cos(t);
+          const C0 = C2 * (2 * Math.cos(t) ** 2 + 1);
+          evalFn = (m) => {
+            const th = angleDeg(m.atoms[i].pos, m.atoms[j].pos, m.atoms[k2].pos) * RAD;
+            return K * (C0 + C1 * Math.cos(th) + C2 * Math.cos(2 * th));
+          };
+        }
+        terms.push({ type: 'angle', atoms: [i, j, k2], theta0, eval: evalFn });
+      }
+    }
+  }
+
+  // --- 비틀림: E = 0.5 * (V/nTors) * [1 - cos(n*phi0) * cos(n*phi)]
+  for (const b of mol.bonds) {
+    const [j, k] = [b.i, b.j];
+    const nbJ = neighbors(mol, j).filter((x) => x !== k);
+    const nbK = neighbors(mol, k).filter((x) => x !== j);
+    if (!nbJ.length || !nbK.length) continue;
+    const hj = hybridization(types[j]), hk = hybridization(types[k]);
+    if (hj === 'sp' || hk === 'sp') continue; // 선형 중심은 비틀림 없음
+
+    const pj = UFF_PARAMS[types[j]], pk = UFF_PARAMS[types[k]];
+    const group16 = (t) => t.startsWith('O_') || t.startsWith('S_');
+    let V, n, phi0;
+    if (hj === 'sp3' && hk === 'sp3') {
+      if (group16(types[j]) && group16(types[k])) {
+        // 16족 sp3-sp3 (과산화물/이황화물) 특수 규칙
+        const vj = types[j].startsWith('O_') ? 2.0 : 6.8;
+        const vk = types[k].startsWith('O_') ? 2.0 : 6.8;
+        V = Math.sqrt(vj * vk); n = 2; phi0 = 90;
+      } else { V = Math.sqrt(pj.V * pk.V); n = 3; phi0 = 60; }
+    } else if (hj === 'sp2' && hk === 'sp2') {
+      V = 5 * Math.sqrt(pj.U * pk.U) * (1 + 4.18 * Math.log(b.order));
+      n = 2; phi0 = 180;
+    } else {
+      V = 1.0; n = 6; phi0 = 0; // sp2-sp3
+    }
+    const scaleN = nbJ.length * nbK.length; // 중심 결합당 비틀림 항 수로 장벽을 분배
+    const amp = 0.5 * V / scaleN;
+    const cos0 = Math.cos(n * phi0 * RAD);
+    for (const i of nbJ) {
+      for (const l of nbK) {
+        terms.push({
+          type: 'torsion', atoms: [i, j, k, l], n, phi0, V,
+          eval(m) {
+            const phi = dihedralDeg(m.atoms[i].pos, m.atoms[j].pos, m.atoms[k].pos, m.atoms[l].pos);
+            return amp * (1 - cos0 * Math.cos(n * phi * RAD));
+          },
+        });
+      }
+    }
+  }
+
+  // --- vdW (LJ 12-6): E = D [ (x0/r)^12 - 2 (x0/r)^6 ]
+  const ex = excludedPairs(mol);
+  for (let i = 0; i < mol.atoms.length; i++) {
+    for (let j = i + 1; j < mol.atoms.length; j++) {
+      if (ex.has(`${i}-${j}`)) continue;
+      const x0 = Math.sqrt(UFF_PARAMS[types[i]].x1 * UFF_PARAMS[types[j]].x1);
+      const D = Math.sqrt(UFF_PARAMS[types[i]].D1 * UFF_PARAMS[types[j]].D1);
+      terms.push({
+        type: 'vdw', atoms: [i, j], x0, D,
+        eval(m) {
+          const r = Math.max(distance(m.atoms[i].pos, m.atoms[j].pos), 0.3); // 특이점 방지
+          const s = (x0 / r) ** 6;
+          return D * (s * s - 2 * s);
+        },
+      });
+    }
+  }
+
+  return terms;
+}
+
+export function energy(mol, terms = buildTerms(mol)) {
+  const byType = { bond: 0, angle: 0, torsion: 0, vdw: 0 };
+  const perAtom = new Array(mol.atoms.length).fill(0);
+  const perBond = new Map();
+  const detail = [];
+  for (const t of terms) {
+    const e = t.eval(mol);
+    byType[t.type] += e;
+    const share = e / t.atoms.length;
+    for (const a of t.atoms) perAtom[a] += share;
+    if (t.type === 'bond') {
+      const [i, j] = t.atoms;
+      perBond.set(`${Math.min(i, j)}-${Math.max(i, j)}`, e);
+    }
+    detail.push({ type: t.type, atoms: t.atoms, e });
+  }
+  const total = byType.bond + byType.angle + byType.torsion + byType.vdw;
+  return { total, byType, perAtom, perBond, terms: detail };
 }
