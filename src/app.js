@@ -37,7 +37,7 @@ function render() {
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
   state.mol.atoms.forEach((a, i) => {
-    viewer.setStyle({ serial: i + 1 }, {
+    viewer.setStyle({ serial: i }, {
       sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
       stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
     });
