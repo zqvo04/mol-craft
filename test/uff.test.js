@@ -67,3 +67,17 @@ test('미지원 원소는 명확한 예외를 던진다', () => {
   const m = build({ atoms: [['Uu', [0, 0, 0]]], bonds: [] });
   assert.throws(() => typeAtom(m, 0), /지원하지 않는 원소/);
 });
+
+test('hybridization은 theta0가 아니라 타입 이름으로 판정한다', () => {
+  // N_2(111.2°)와 O_R(110°)은 theta0가 sp3 범위지만 실제로는 sp2다.
+  // theta0 기반 판정은 이 둘을 sp3로 오분류해 비틀림 항 주기를 망친다.
+  assert.equal(hybridization('N_2'), 'sp2');
+  assert.equal(hybridization('O_R'), 'sp2');
+  assert.equal(hybridization('C_R'), 'sp2');
+  assert.equal(hybridization('C_3'), 'sp3');
+  assert.equal(hybridization('C_1'), 'sp');
+  assert.equal(hybridization('S_3+6'), 'sp3');
+  assert.equal(hybridization('P_3+5'), 'sp3');
+  assert.equal(hybridization('Si3'), 'sp3');
+  assert.throws(() => hybridization('Xx_9'), /알 수 없는 UFF 타입/);
+});

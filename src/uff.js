@@ -27,12 +27,15 @@ export function typeAtom(mol, i) {
   }
 }
 
-// 비틀림 항 분기용. theta0로 판정하면 표와 항상 일관된다.
+const HYB_BY_SUFFIX = { 1: 'sp', 2: 'sp2', R: 'sp2', 3: 'sp3' };
+
+// 비틀림 항 분기용. UFF 타입 이름의 3번째 글자가 혼성을 직접 인코딩한다.
+// theta0로 판정하면 안 된다: N_2는 111.2°, O_R은 110°라서 sp3로 오분류되고
+// 비틀림 항이 n=3 주기로 잘못 생성된다.
+// 'C_3'->'3', 'C_R'->'R', 'S_3+6'->'3', 'Si3'->'3'.
+// 말단 타입(H_/F_/Cl/Br/I_)은 접미사가 없어 'sp'로 떨어지는데,
+// 이웃이 하나뿐이라 애초에 비틀림 중심이 될 수 없으므로 무해하다.
 export function hybridization(type) {
-  const p = UFF_PARAMS[type];
-  if (!p) throw new Error(`알 수 없는 UFF 타입: ${type}`);
-  if (p.theta0 > 179) return 'sp';
-  if (Math.abs(p.theta0 - 120) < 0.01) return 'sp2';
-  if (p.theta0 < 115) return 'sp3';
-  return 'other';
+  if (!UFF_PARAMS[type]) throw new Error(`알 수 없는 UFF 타입: ${type}`);
+  return HYB_BY_SUFFIX[type[2]] ?? 'sp';
 }
