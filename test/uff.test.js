@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { typeAtom, hybridization, bondLength, buildTerms, energy } from '../src/uff.js';
+import { typeAtom, hybridization, bondLength, buildTerms, energy, gradient, minimize } from '../src/uff.js';
 import { UFF_PARAMS } from '../src/params.js';
 
 function build(spec) {
@@ -141,4 +141,44 @@ test('energy가 항별/원자별로 분해된다', () => {
   assert.ok(Math.abs(e.total - (e.byType.bond + e.byType.angle + e.byType.torsion + e.byType.vdw)) < 1e-9);
   assert.ok(Math.abs(e.total - e.perAtom.reduce((a, b) => a + b, 0)) < 1e-9, 'perAtom 합 = total');
   assert.equal(e.perBond.size, 4);
+});
+
+// 일그러진 메탄(최소화 시작 구조)
+function distortedMethane() {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  for (const p of [[0.9, 0.9, 0.8], [-0.8, -0.9, 0.9], [-0.9, 0.8, -0.8], [0.8, -0.8, -0.95]])
+    addAtom(m, 'H', p);
+  for (let i = 1; i <= 4; i++) addBond(m, 0, i);
+  return m;
+}
+
+test('수치 그래디언트가 유한차분 총에너지와 일치한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  for (const p of [[0.7, 0.7, 0.6], [-0.6, -0.7, 0.7], [-0.7, 0.6, -0.6], [0.6, -0.6, -0.75]])
+    addAtom(m, 'H', p);
+  for (let i = 1; i <= 4; i++) addBond(m, 0, i);
+  const terms = buildTerms(m);
+  const g = gradient(m, terms);
+  const h = 1e-5, i = 2, d = 1;
+  const o = m.atoms[i].pos[d];
+  m.atoms[i].pos[d] = o + h; const ep = energy(m, terms).total;
+  m.atoms[i].pos[d] = o - h; const em = energy(m, terms).total;
+  m.atoms[i].pos[d] = o;
+  assert.ok(Math.abs(g[3 * i + d] - (ep - em) / (2 * h)) < 1e-3);
+});
+
+test('minimize가 에너지를 낮추고 수렴한다', () => {
+  const m = distortedMethane();
+  const r = minimize(m);
+  assert.ok(r.energyAfter < r.energyBefore);
+  assert.equal(r.converged, true);
+});
+
+test('frozen 원자는 움직이지 않는다', () => {
+  const m = distortedMethane();
+  const fixed = [...m.atoms[1].pos];
+  minimize(m, { frozen: new Set([1]) });
+  assert.deepEqual(m.atoms[1].pos, fixed);
 });

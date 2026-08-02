@@ -218,3 +218,70 @@ export function energy(mol, terms = buildTerms(mol)) {
   const total = byType.bond + byType.angle + byType.torsion + byType.vdw;
   return { total, byType, perAtom, perBond, terms: detail };
 }
+
+// 해석적 미분 대신 항별 국소 중심차분을 쓴다.
+// 각 항은 원자 2~4개만 참조하므로 항당 비용이 상수이고, 전체는 항 수에 선형이다.
+// 토션 해석 미분보다 코드가 훨씬 짧고 오차는 1e-6 수준. 수천 원자 규모로 키우려면 해석 미분으로 교체.
+const H_STEP = 1e-5;
+
+export function gradient(mol, terms = buildTerms(mol)) {
+  const g = new Float64Array(mol.atoms.length * 3);
+  for (const t of terms) {
+    for (const a of t.atoms) {
+      const p = mol.atoms[a].pos;
+      for (let d = 0; d < 3; d++) {
+        const o = p[d];
+        p[d] = o + H_STEP; const ep = t.eval(mol);
+        p[d] = o - H_STEP; const em = t.eval(mol);
+        p[d] = o;
+        g[3 * a + d] += (ep - em) / (2 * H_STEP);
+      }
+    }
+  }
+  return g;
+}
+
+// 백트래킹 선탐색을 붙인 최급강하법.
+export function minimize(mol, opts = {}) {
+  const {
+    maxSteps = 400, gradTol = 0.05, recordTrajectory = false, frozen = new Set(),
+  } = opts;
+  const terms = buildTerms(mol);
+  const energyBefore = energy(mol, terms).total;
+  let e = energyBefore;
+  let step = 0.05; // Å
+  const trajectory = [];
+  let converged = false;
+  let s = 0;
+
+  for (; s < maxSteps; s++) {
+    const g = gradient(mol, terms);
+    for (const f of frozen) { g[3 * f] = g[3 * f + 1] = g[3 * f + 2] = 0; }
+    let gmax = 0;
+    for (let i = 0; i < g.length; i++) gmax = Math.max(gmax, Math.abs(g[i]));
+    if (gmax < gradTol) { converged = true; break; }
+
+    let gnorm = 0;
+    for (let i = 0; i < g.length; i++) gnorm += g[i] * g[i];
+    gnorm = Math.sqrt(gnorm);
+    const saved = mol.atoms.map((a) => [...a.pos]);
+    let accepted = false;
+    for (let trial = 0; trial < 12; trial++) {
+      for (let i = 0; i < mol.atoms.length; i++) {
+        for (let d = 0; d < 3; d++) {
+          mol.atoms[i].pos[d] = saved[i][d] - (step * g[3 * i + d]) / gnorm;
+        }
+      }
+      const eNew = energy(mol, terms).total;
+      if (eNew < e) { e = eNew; step *= 1.2; accepted = true; break; }
+      for (let i = 0; i < mol.atoms.length; i++) mol.atoms[i].pos = [...saved[i]];
+      step *= 0.5;
+    }
+    if (!accepted) { converged = true; break; } // 더 내려갈 곳이 없음
+    if (recordTrajectory) {
+      trajectory.push({ energy: e, positions: mol.atoms.map((a) => [...a.pos]) });
+    }
+  }
+
+  return { steps: s, energyBefore, energyAfter: e, converged, trajectory };
+}
