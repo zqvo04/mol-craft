@@ -1,10 +1,10 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
-import { neighbors, measure, addAtom, addBond } from './model.js';
-import { canBond, vseprCheck, newSnapEvents } from './snap.js';
+import { neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral } from './model.js';
+import { canBond, vseprCheck, newSnapEvents, idealDirection, stability } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
-import { sub, unit, add, scale, norm, cross, dot } from './geom.js';
+import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 
 const state = {
@@ -12,6 +12,7 @@ const state = {
   mode: 'learn',
   selection: [],
   snapState: {},
+  showGrid: true,
 };
 
 const LS_KEY = 'molcraft:last';
@@ -30,6 +31,28 @@ function restoreLocal() {
 const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
   backgroundColor: getComputedStyle(document.body).backgroundColor,
 });
+
+// 휠 방향 보정. 3Dmol이 뷰어 요소 자체(target 단계)에 이미 휠 리스너를 붙여놓았으므로
+// 같은 요소에 나중에 리스너를 달아도 순서를 못 이긴다. document에 캡처 단계로 걸면
+// 이벤트가 target에 닿기 전에 먼저 잡혀 3Dmol 기본 동작을 완전히 대체할 수 있다.
+document.addEventListener('wheel', (ev) => {
+  if (!document.getElementById('viewer').contains(ev.target)) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  viewer.zoom(ev.deltaY < 0 ? 1.15 : 1 / 1.15);
+  viewer.render();
+}, { capture: true, passive: false });
+
+// 배경 3D 참조 그리드(XZ 평면, 1 Å 간격). 깊이감 보조용 — 5칸마다 굵은 선.
+function drawGrid() {
+  if (!state.showGrid) return;
+  const N = 8, Y = -4;
+  for (let i = -N; i <= N; i++) {
+    const color = i % 5 === 0 ? '#94a3b8' : '#cbd5e1';
+    viewer.addLine({ start: { x: -N, y: Y, z: i }, end: { x: N, y: Y, z: i }, color });
+    viewer.addLine({ start: { x: i, y: Y, z: -N }, end: { x: i, y: Y, z: N }, color });
+  }
+}
 
 // 응력 색상: 낮음(파랑) -> 중간(회백색) -> 높음(빨강).
 // ColorBrewer RdBu 3-스톱 발산 팔레트 — 색맹(적록색맹 포함) 사용자도
@@ -52,6 +75,7 @@ function render() {
   viewer.removeAllModels();
   viewer.removeAllShapes();
   viewer.addModel(toXYZ(state.mol), 'xyz');
+  drawGrid();
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
   state.mol.atoms.forEach((a, i) => {
@@ -110,6 +134,34 @@ function updatePanels(e) {
       return `<tr><td>${state.mol.atoms[i].el}${i} (배위 ${v.coordination})</td><td>${status}</td></tr>`;
     });
   $('vsepr').innerHTML = rows.length ? `<table>${rows.join('')}</table>` : '—';
+
+  // 안정도 HUD: 옥텟/원자가·VSEPR 편차를 점수+칩으로 요약(게이밍 스타일 즉시 피드백).
+  const st = stability(state.mol);
+  const scoreColor = st.score >= 80 ? 'var(--success)' : st.score >= 50 ? 'var(--accent)' : '#dc2626';
+  $('stability').innerHTML = `<span style="color:${scoreColor};font-weight:700">${st.score}</span>` +
+    st.issues.map((x) => `<span class="chip ${x.level}">${x.level === 'danger' ? '✕' : '▲'} ${x.msg}</span>`).join('');
+
+  updateDihedralPanel();
+}
+
+// 선택 4개 + 고리 결합이 아니면 이면각 슬라이더를 활성화해 setDihedral로 직접 회전시킨다.
+function updateDihedralPanel() {
+  const s = state.selection;
+  const slider = $('dihedral');
+  if (s.length !== 4) {
+    slider.disabled = true;
+    $('dihedral-info').textContent = '원자 4개를 순서대로 선택하면 활성화됩니다';
+    return;
+  }
+  if (branchAtoms(state.mol, s[1], s[2]) === null) {
+    slider.disabled = true;
+    $('dihedral-info').textContent = '고리 결합 — 직접 회전 불가';
+    return;
+  }
+  slider.disabled = false;
+  const deg = Math.round(measure(state.mol, s));
+  slider.value = deg;
+  $('dihedral-info').textContent = `${deg}°`;
 }
 
 // 라이브러리 없이 인라인 SVG 꺾은선. 최소/최대는 색상뿐 아니라 모양(원/다이아몬드)으로도
@@ -186,40 +238,13 @@ const REASON_MSG = {
   'same-atom': '같은 원자입니다',
 };
 
-// 앵커 원자 주위에서 새 원자를 붙일 방향("가장 빈 공간")을 계산한다.
-// 기본은 기존 결합 방향들의 합의 반대. 다만 그 합이 상쇄되거나(선형 2배위, 평면 삼각형
-// 3배위의 정확한 대칭) 잔차가 우연히 기존 결합 한쪽과 거의 같은 방향을 가리키면(예: 3배위가
-// 완벽한 120°에 근접했지만 정확히는 아닐 때) 새 원자가 기존 원자와 겹쳐 버린다(겹친 원자는
-// UFF 기울기가 대칭으로 0이라 minimize()로도 안 풀린다). 그런 경우 기존 결합 중 평행하지
-// 않은 두 벡터의 평면 법선(그 평면을 벗어나는 방향)을 쓴다. 결합이 없거나 전부 한 직선
-// 위(법선을 정의할 평면이 없음)면 임의의 수직 방향.
-function emptyDirection(mol, anchor) {
-  const nb = neighbors(mol, anchor);
-  const a = mol.atoms[anchor].pos;
-  const vecs = nb.map((n) => unit(sub(mol.atoms[n].pos, a)));
-  if (vecs.length === 0) return [1, 0, 0];
-
-  const sum = vecs.reduce((s, v) => sub(s, v), [0, 0, 0]);
-  if (norm(sum) >= 1e-3) {
-    const candidate = unit(sum);
-    if (!vecs.some((v) => dot(candidate, v) > 0.9)) return candidate;
-  }
-  for (let i = 0; i < vecs.length; i++) {
-    for (let j = i + 1; j < vecs.length; j++) {
-      const n = cross(vecs[i], vecs[j]);
-      if (norm(n) > 1e-3) return unit(n);
-    }
-  }
-  const ref = Math.abs(vecs[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-  return unit(cross(vecs[0], ref));
-}
-
-// 앵커 원자에 선택된 원소를 붙인다. 결합이 성립하면 UFF 평형 길이로 '자석처럼' 스냅시킨다.
+// 앵커 원자에 선택된 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
+// 계산한다(레고처럼 정해진 각도에만 물림). 결합이 성립하면 UFF 평형 길이로 스냅시킨다.
 // 실패 시 방금 추가한 원자를 되돌린다.
 function attachAtom(anchor) {
   const el = $('element').value;
   const a = state.mol.atoms[anchor].pos;
-  const dir = emptyDirection(state.mol, anchor);
+  const dir = idealDirection(state.mol, anchor);
 
   const idx = addAtom(state.mol, el, add(a, scale(dir, 2.5)));
   // canBond(mol, i, j)의 reason 태그는 i=중심/j=신규로 고정된 관례다(snap.test.js 참고).
@@ -238,6 +263,17 @@ function attachAtom(anchor) {
   if (check.reason === 'ok-expanded') toast('초원자가 결합 — UFF 정확도 주의', 'err');
 
   if (state.mode === 'learn') minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
+  checkSnaps();
+  render();
+}
+
+// Shift+클릭으로 원자를 뗀다(레고 분해). 원자가 하나뿐이면 남길 것이 없으니 막는다.
+function deleteAtom(i) {
+  if (state.mol.atoms.length <= 1) { toast('마지막 원자는 삭제할 수 없습니다', 'err'); return; }
+  removeAtom(state.mol, i);
+  state.selection = state.selection.filter((s) => s !== i).map((s) => (s > i ? s - 1 : s));
+  state.snapState = {};
+  playClick(220);
   checkSnaps();
   render();
 }
@@ -268,10 +304,22 @@ function checkSnaps() {
 $('scan').onclick = () => {
   if (state.selection.length !== 4) { toast('원자 4개를 순서대로 선택하세요', 'err'); return; }
   try {
-    drawScan(scanDihedral(state.mol, state.selection, { stepDeg: 10, relax: state.mode === 'research' }));
+    drawScan(scanDihedral(state.mol, state.selection, {
+      stepDeg: Number($('scan-step').value),
+      relax: $('scan-relax').checked,
+    }));
   } catch (err) {
     toast(err.message, 'err');
   }
+};
+
+$('dihedral').oninput = (ev) => {
+  if (state.selection.length !== 4) return;
+  if (!setDihedral(state.mol, state.selection, Number(ev.target.value))) {
+    toast('고리 결합은 회전할 수 없습니다', 'err');
+    return;
+  }
+  render();
 };
 
 $('minimize').onclick = () => {
@@ -341,15 +389,25 @@ if (isShareEnabled()) {
   });
 }
 
-// 클릭 배선: 학습 모드는 원자 부착, 연구 모드는 측정 선택.
+// 클릭 배선: 학습 모드는 원자 부착(Shift+클릭은 삭제), 연구 모드는 측정 선택.
 // atom.serial은 XYZ 모델에서 0-based로 배열 인덱스와 그대로 일치한다(위 onAtomClick 주석 참고).
-viewer.setClickable({}, true, (atom) => {
+viewer.setClickable({}, true, (atom, _v, ev) => {
   const i = atom.serial;
-  if (state.mode === 'learn') attachAtom(i);
-  else onAtomClick(i);
+  if (state.mode === 'learn') {
+    if (ev?.shiftKey) deleteAtom(i);
+    else attachAtom(i);
+  } else onAtomClick(i);
 });
 
-$('mode').onchange = (ev) => { state.mode = ev.target.value; state.selection = []; render(); };
+$('mode').onchange = (ev) => {
+  state.mode = ev.target.value;
+  state.selection = [];
+  document.body.dataset.mode = state.mode;
+  render();
+};
+
+$('grid').onchange = (ev) => { state.showGrid = ev.target.checked; render(); };
+document.body.dataset.mode = state.mode;
 
 $('preset').innerHTML = Object.entries(PRESETS)
   .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
