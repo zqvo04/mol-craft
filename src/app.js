@@ -13,6 +13,19 @@ const state = {
   snapState: {},
 };
 
+const LS_KEY = 'molcraft:last';
+
+function saveLocal() {
+  try { localStorage.setItem(LS_KEY, encodeState(state.mol)); }
+  catch { /* 용량 초과·프라이빗 모드 등은 무시한다. 저장 실패가 앱을 막으면 안 된다. */ }
+}
+
+function restoreLocal() {
+  const raw = localStorage.getItem(LS_KEY);
+  if (!raw) return null;
+  try { return decodeState(raw); } catch { return null; }
+}
+
 const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
   backgroundColor: getComputedStyle(document.body).backgroundColor,
 });
@@ -56,6 +69,7 @@ function render() {
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
   updatePanels(e);
+  saveLocal();
 }
 
 const $ = (id) => document.getElementById(id);
@@ -260,8 +274,24 @@ $('scan').onclick = () => {
 };
 
 $('minimize').onclick = () => {
-  const r = minimize(state.mol);
+  const r = minimize(state.mol, { recordTrajectory: true });
+  state.trajectory = r.trajectory;
+  const slider = $('replay');
+  slider.max = Math.max(0, r.trajectory.length - 1);
+  slider.value = slider.max;
+  slider.disabled = r.trajectory.length === 0;
+  $('replay-info').textContent =
+    `${r.steps} 스텝 · ${r.energyBefore.toFixed(2)} → ${r.energyAfter.toFixed(2)} kcal/mol`;
   toast(`최적화 완료: ${r.energyBefore.toFixed(2)} → ${r.energyAfter.toFixed(2)} kcal/mol`);
+  checkSnaps();
+  render();
+};
+
+$('replay').oninput = (ev) => {
+  const frame = state.trajectory?.[Number(ev.target.value)];
+  if (!frame) return;
+  frame.positions.forEach((p, i) => { state.mol.atoms[i].pos = [...p]; });
+  $('replay-info').textContent = `프레임 ${ev.target.value} · ${frame.energy.toFixed(2)} kcal/mol`;
   render();
 };
 
@@ -306,9 +336,12 @@ $('preset').onchange = (ev) => {
   if (note) toast(note);
 };
 
-// 진입 시 URL 해시 복원. 손상된 링크는 조용히 무시하고 기본 프리셋을 유지한다.
+// 진입 시 우선순위: URL 해시 > localStorage > 기본 프리셋. 손상된 링크/저장값은
+// 조용히 무시하고 다음 우선순위로 넘어간다.
 if (location.hash.startsWith('#s=')) {
   try { state.mol = decodeState(location.hash.slice(3)); } catch { /* 손상된 링크는 무시 */ }
+} else {
+  state.mol = restoreLocal() ?? state.mol;
 }
 
 // 초기 로드 시점의 VSEPR 만족 상태를 baseline으로 기록해, 이후 첫 실제 클릭에서
