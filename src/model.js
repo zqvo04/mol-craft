@@ -31,6 +31,23 @@ export function removeAtom(mol, idx) {
     }));
 }
 
+// 선택 원자를 2 Å 옆에 복제한다. 두 끝 다 선택에 포함된 결합만 같이 복제한다
+// (선택 밖 원자와의 결합은 복제본에서 끊긴 채로 둔다 — 부분 선택 복제 시 자연스러운 동작).
+export function duplicateAtoms(mol, indices) {
+  const set = new Set(indices);
+  const map = new Map();
+  for (const i of indices) {
+    const src = mol.atoms[i];
+    map.set(i, addAtom(mol, src.el, [src.pos[0] + 2, src.pos[1], src.pos[2]]));
+  }
+  for (const b of mol.bonds) {
+    if (set.has(b.i) && set.has(b.j) && map.get(b.i) !== undefined && map.get(b.j) !== undefined) {
+      addBond(mol, map.get(b.i), map.get(b.j), b.order);
+    }
+  }
+  return indices.map((i) => map.get(i));
+}
+
 export const neighbors = (mol, i) =>
   mol.bonds.filter((b) => b.i === i || b.j === i).map((b) => (b.i === i ? b.j : b.i));
 
