@@ -16,12 +16,12 @@ test('canBond: 원자가가 남으면 허용', () => {
   assert.ok(Math.abs(r.targetLength - 1.109) < 0.02);
 });
 
-test('canBond: 원자가가 가득 차면 거부', () => {
+test('canBond: 원자가가 가득 차도 이제 막지 않고 overloaded로 표시한다', () => {
   const m = loadPreset('methane');
   addAtom(m, 'H', [3, 0, 0]);
   const r = canBond(m, 0, 5);
-  assert.equal(r.ok, false);
-  assert.equal(r.reason, 'valence-full-i');
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, 'ok-overloaded');
 });
 
 test('canBond: 이미 결합된 쌍은 거부', () => {
@@ -84,6 +84,7 @@ test('idealDirection: 메탄을 원자별로 순차 조립하면 정사면체로
 });
 
 test('idealDirection: 두 결합이 있는 중심에 붙일 때 둘 다에 이상각으로 맞는다', () => {
+  // N은 전자 도메인 4개(결합3 + 비공유쌍1)이므로 목표는 109.47°다(암모니아 삼각뿔형 방향).
   const m = createMolecule();
   addAtom(m, 'N', [0, 0, 0]);
   addAtom(m, 'H', idealDirection(m, 0));
@@ -93,7 +94,16 @@ test('idealDirection: 두 결합이 있는 중심에 붙일 때 둘 다에 이�
   const dir = idealDirection(m, 0);
   const a1 = angleDeg(m.atoms[1].pos, [0, 0, 0], dir);
   const a2 = angleDeg(m.atoms[2].pos, [0, 0, 0], dir);
-  assert.ok(Math.abs(a1 - 120) < 0.1 && Math.abs(a2 - 120) < 0.1);
+  assert.ok(Math.abs(a1 - 109.47) < 0.1 && Math.abs(a2 - 109.47) < 0.1);
+});
+
+test('idealDirection: 물은 첫 두 H가 109.47°(사면체 방향)로 붙는다 — 180°에 갇히지 않는다', () => {
+  const m = createMolecule();
+  addAtom(m, 'O', [0, 0, 0]);
+  const h1 = idealDirection(m, 0);
+  addAtom(m, 'H', h1); addBond(m, 0, 1);
+  const h2 = idealDirection(m, 0);
+  assert.ok(Math.abs(angleDeg(h1, [0, 0, 0], h2) - 109.47) < 0.1);
 });
 
 test('stability: 최적화된 메탄은 100점, 초원자가 SF6는 감점된다', () => {
