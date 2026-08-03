@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR } from '../src/snap.js';
-import { distance } from '../src/geom.js';
+import {
+  canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, stability,
+} from '../src/snap.js';
+import { distance, angleDeg } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
 import { minimize } from '../src/uff.js';
 
@@ -69,4 +71,38 @@ test('newSnapEvents가 새로 만족된 중심만 보고한다', () => {
   const prev = { 0: false, 1: true };
   const next = { 0: true, 1: true };
   assert.deepEqual(newSnapEvents(prev, next), ['0']);
+});
+
+test('idealDirection: 메탄을 원자별로 순차 조립하면 정사면체로 수렴한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  for (let k = 0; k < 4; k++) {
+    const idx = addAtom(m, 'H', idealDirection(m, 0));
+    addBond(m, 0, idx);
+  }
+  assert.equal(vseprCheck(m, 0).satisfied, true);
+});
+
+test('idealDirection: 두 결합이 있는 중심에 붙일 때 둘 다에 이상각으로 맞는다', () => {
+  const m = createMolecule();
+  addAtom(m, 'N', [0, 0, 0]);
+  addAtom(m, 'H', idealDirection(m, 0));
+  addBond(m, 0, 1);
+  addAtom(m, 'H', idealDirection(m, 0));
+  addBond(m, 0, 2);
+  const dir = idealDirection(m, 0);
+  const a1 = angleDeg(m.atoms[1].pos, [0, 0, 0], dir);
+  const a2 = angleDeg(m.atoms[2].pos, [0, 0, 0], dir);
+  assert.ok(Math.abs(a1 - 120) < 0.1 && Math.abs(a2 - 120) < 0.1);
+});
+
+test('stability: 최적화된 메탄은 100점, 초원자가 SF6는 감점된다', () => {
+  const good = loadPreset('methane');
+  minimize(good);
+  assert.equal(stability(good).score, 100);
+
+  const sf6 = loadPreset('sf6');
+  const s = stability(sf6);
+  assert.ok(s.score < 100);
+  assert.ok(s.issues.some((x) => x.msg.includes('초원자가')));
 });
