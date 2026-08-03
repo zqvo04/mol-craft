@@ -16,6 +16,23 @@ export const IDEAL_ANGLES = {
   6: [90],
 };
 
+// 정상 원자가 상태의 비공유 전자쌍 수(형식 전하 없는 중성 원자 기준).
+export const LONE_PAIRS = { H: 0, B: 0, C: 0, N: 1, O: 2, F: 3, Si: 0, P: 1, S: 2, Cl: 3, Br: 3, I: 3 };
+
+// 전자 도메인 수(결합 자리 + 비공유 전자쌍) = idealDirection이 조준할 실제 VSEPR 형상.
+// MAX_VALENCE만 쓰면 물(O, 결합 2개)이 배위수 2 취급되어 직선(180°)으로 붙는다 — 산소는
+// 결합이 몇 개 붙었든 항상 4개 도메인(결합2 + 비공유쌍2)이므로 정사면체 각도로 조준해야
+// 붙인 순간부터 굽은형에 가깝게 시작하고, 대칭적으로 180°/120°에 갇혀 최적화가 못 빠져나오는
+// 문제(대칭점은 기울기가 0이라 무너지지 않음)도 함께 없어진다.
+export const ELECTRON_DOMAINS = Object.fromEntries(
+  Object.keys(LONE_PAIRS).map((el) => [el, (MAX_VALENCE[el] ?? 0) + LONE_PAIRS[el]]),
+);
+
+// 원자가 초과도 이제 결합 자체를 막지 않는다 — 조립은 항상 허용하고, 불안정한 결과는
+// stability()가 경고로 알린다("일단 끼울 순 있되 흔들린다는 표시"). 데이터 모델상 의미가
+// 없는 경우(자기 자신, 이미 있는 결합, UFF 파라미터 없는 원소)만 여전히 막는다.
+// reason 등급: 'ok' 정상 / 'ok-expanded' 초원자가(EXPANDED_VALENCE 이내, 예: SF6) /
+// 'ok-overloaded' 그 한계마저 넘김(예: CH5) — 셋 다 ok:true.
 export function canBond(mol, i, j) {
   if (i === j) return { ok: false, reason: 'same-atom' };
   if (bondBetween(mol, i, j)) return { ok: false, reason: 'already-bonded' };
@@ -23,21 +40,17 @@ export function canBond(mol, i, j) {
   try { ti = typeAtom(mol, i); tj = typeAtom(mol, j); }
   catch { return { ok: false, reason: 'unsupported-element' }; }
 
-  let expanded = false;
-  for (const [idx, tag] of [[i, 'i'], [j, 'j']]) {
+  let reason = 'ok';
+  for (const idx of [i, j]) {
     const el = mol.atoms[idx].el;
     const used = bondOrderSum(mol, idx);
     const normal = MAX_VALENCE[el];
-    const max = EXPANDED_VALENCE[el] ?? normal;
+    const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
-    if (used + 1 > max) return { ok: false, reason: `valence-full-${tag}` };
-    if (used + 1 > normal) expanded = true;
+    if (used + 1 > capMax) reason = 'ok-overloaded';
+    else if (used + 1 > normal && reason === 'ok') reason = 'ok-expanded';
   }
-  return {
-    ok: true,
-    reason: expanded ? 'ok-expanded' : 'ok',
-    targetLength: bondLength(ti, tj, 1),
-  };
+  return { ok: true, reason, targetLength: bondLength(ti, tj, 1) };
 }
 
 // moving 원자를 anchor 쪽으로 '자석처럼' 당길 목표 좌표.
@@ -101,20 +114,21 @@ function sumFallback(dirs) {
 }
 
 // 앵커에 새 원자를 붙일 방향을 VSEPR 이상각에 정확히 맞춰("자석처럼") 계산한다.
-// 목표 각도는 앵커 원소의 최종 배위수(MAX_VALENCE) 기준이다 — 매 스텝의 현재 배위수를
-// 쓰면 2번째 치환기가 180°(선형)로 붙어버려 3·4번째가 정사면체로 수렴하지 못하고
-// 평면/팔면체 조각에 갇힌다. 최종 배위수를 목표로 잡아야 순차 조립이 매번 올바른 형상으로 수렴한다.
+// 목표 각도는 앵커 원소의 전자 도메인 수(ELECTRON_DOMAINS = 결합자리 + 비공유쌍) 기준이다.
+// 결합 개수만 쓰면 2번째 치환기가 180°(선형)로 붙어버려 3·4번째가 정사면체로 수렴하지 못하고
+// 평면/팔면체 조각에 갇힌다. 전자 도메인을 목표로 잡아야 순차 조립이 매번 올바른 형상(물의
+// 굽은형, 암모니아의 삼각뿔형 등 비공유쌍이 있는 분자 포함)으로 수렴한다.
 // 배위수 0/1개: 기존 방향이 없거나 하나뿐이면 임의의 축으로 이상각만큼 회전(원뿔 위 한 점,
 //   원뿔 방위각은 임의 — 부착 후 회전 미세조정으로 조절).
 // 배위수 2개: 두 기존 방향이 이루는 평면에서 정확한 해석해(이등분선/법선 기저 분해)를 쓴다.
 //   기존 두 결합이 정확히 이상각이 아니어도(예: 조립 중간 단계) 강건하게 작동한다.
 // 배위수 3개 이상: 대칭 형상에서는 -sum이 정확한 4번째 방향과 일치한다(정사면체).
-//   배위수 5 이상(초원자가)은 해석해가 없어 sumFallback으로 넘어간다.
+//   전자 도메인 5개 이상(초원자가)은 해석해가 없어 sumFallback으로 넘어간다.
 export function idealDirection(mol, anchor) {
   const nb = neighbors(mol, anchor);
   const a = mol.atoms[anchor].pos;
   const dirs = nb.map((n) => unit(sub(mol.atoms[n].pos, a)));
-  const targetCoord = MAX_VALENCE[mol.atoms[anchor].el] ?? dirs.length + 1;
+  const targetCoord = ELECTRON_DOMAINS[mol.atoms[anchor].el] ?? dirs.length + 1;
   const ideal = IDEAL_ANGLES[targetCoord]?.[0];
 
   if (dirs.length === 1 && ideal !== undefined) {
@@ -153,10 +167,19 @@ export function stability(mol) {
   for (let i = 0; i < mol.atoms.length; i++) {
     const nb = neighbors(mol, i);
     if (nb.length === 0) continue;
-    let type;
-    try { type = typeAtom(mol, i); } catch { continue; }
-    if (['P_3+5', 'S_3+6'].includes(type)) {
-      issues.push({ atom: i, level: 'warn', msg: `${mol.atoms[i].el}${i} 초원자가` });
+    const el = mol.atoms[i].el;
+    try { typeAtom(mol, i); } catch { continue; }
+
+    // 원자가 초과는 이제 canBond가 막지 않으므로(레고처럼 일단 끼울 수 있게 허용) 여기서
+    // 직접 재계산해 경고한다. capMax(EXPANDED_VALENCE)까지는 초원자가로 약한 경고,
+    // 그마저 넘기면(예: CH5) 위험으로 표시한다.
+    const used = bondOrderSum(mol, i);
+    const normal = MAX_VALENCE[el];
+    const capMax = EXPANDED_VALENCE[el] ?? normal;
+    if (normal !== undefined && used > capMax) {
+      issues.push({ atom: i, level: 'danger', msg: `${el}${i} 원자가 초과(${used}/${capMax})` });
+    } else if (normal !== undefined && used > normal) {
+      issues.push({ atom: i, level: 'warn', msg: `${el}${i} 초원자가` });
     }
     if (nb.length >= 2) {
       const v = vseprCheck(mol, i);

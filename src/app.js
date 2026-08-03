@@ -74,24 +74,34 @@ document.addEventListener('wheel', (ev) => {
 // 배경 3D 참조 격자를 정육면체 6면 전부에 그린다(1 Å 간격, 5칸마다 굵은 선).
 // 바닥 한 장뿐이면 뒤에서 볼 때 깊이감이 사라진다 — 방(room) 형태여야 어느 각도로
 // 돌려도 위치 감각이 유지된다.
-function drawGrid() {
-  if (!state.showGrid) return;
+// 한 번만 만들어 핸들을 들고 있는다 — render()가 매번 지웠다 새로 그리면(150개 넘는 선을
+// 클릭·드래그·슬라이더 조작마다 재생성) 조작감이 뚝뚝 끊긴다. 그리드는 분자와 무관한
+// 고정 배경이므로 render()의 생명주기에서 완전히 떼어낸다.
+let gridShapes = [];
+function buildGrid() {
+  if (gridShapes.length > 0) return;
   const N = 6;
   for (let i = -N; i <= N; i++) {
     const color = i % 5 === 0 ? '#94a3b8' : '#cbd5e1';
     for (const y of [-N, N]) { // 위/아래(XZ면)
-      viewer.addLine({ start: { x: -N, y, z: i }, end: { x: N, y, z: i }, color });
-      viewer.addLine({ start: { x: i, y, z: -N }, end: { x: i, y, z: N }, color });
+      gridShapes.push(viewer.addLine({ start: { x: -N, y, z: i }, end: { x: N, y, z: i }, color }));
+      gridShapes.push(viewer.addLine({ start: { x: i, y, z: -N }, end: { x: i, y, z: N }, color }));
     }
     for (const z of [-N, N]) { // 앞/뒤(XY면)
-      viewer.addLine({ start: { x: -N, y: i, z }, end: { x: N, y: i, z }, color });
-      viewer.addLine({ start: { x: i, y: -N, z }, end: { x: i, y: N, z }, color });
+      gridShapes.push(viewer.addLine({ start: { x: -N, y: i, z }, end: { x: N, y: i, z }, color }));
+      gridShapes.push(viewer.addLine({ start: { x: i, y: -N, z }, end: { x: i, y: N, z }, color }));
     }
     for (const x of [-N, N]) { // 좌/우(YZ면)
-      viewer.addLine({ start: { x, y: -N, z: i }, end: { x, y: N, z: i }, color });
-      viewer.addLine({ start: { x, y: i, z: -N }, end: { x, y: i, z: N }, color });
+      gridShapes.push(viewer.addLine({ start: { x, y: -N, z: i }, end: { x, y: N, z: i }, color }));
+      gridShapes.push(viewer.addLine({ start: { x, y: i, z: -N }, end: { x, y: i, z: N }, color }));
     }
   }
+  viewer.render();
+}
+function clearGrid() {
+  for (const s of gridShapes) viewer.removeShape(s);
+  gridShapes = [];
+  viewer.render();
 }
 
 // atom.serial과 동일한 규칙(XYZ 모델 0-based 배열 인덱스)으로 페이지 좌표(pageX/Y)에
@@ -122,28 +132,50 @@ export function strainColor(v, vmax) {
 }
 
 let firstRender = true;
+let selectionShapes = []; // render()가 만드는 노란 강조 구 — 이 배열만 지웠다 다시 그린다.
+let labelShapes = []; // 골격 구조식(2D) 모드의 헤테로원자 라벨.
 
 function render() {
   const e = energy(state.mol);
   state.lastEnergy = e;
   viewer.removeAllModels();
-  viewer.removeAllShapes();
+  // removeAllShapes()는 쓰지 않는다 — 그리드(고정 배경)와 붙이기 고스트를 함께 지워버려서,
+  // 클릭·드래그·슬라이더 조작마다(즉 render()가 불릴 때마다) 150개 넘는 격자선을 다시 그리게
+  // 되어 조작감이 뚝뚝 끊겼다. 이 함수가 만든 선택 강조 구만 추적해서 그것만 지운다.
+  for (const s of selectionShapes) viewer.removeShape(s);
+  selectionShapes = [];
   viewer.addModel(toXYZ(state.mol), 'xyz');
-  drawGrid();
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
   state.mol.atoms.forEach((a, i) => {
-    viewer.setStyle({ serial: i }, {
-      sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
-      stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
-    });
+    if (state.flat) {
+      // 골격 구조식: 수소는 암묵적으로 숨기고(결합선도 함께 사라짐), 탄소는 꼭짓점만으로
+      // 표시한다(구 없음). 응력 색은 이 보기의 목적과 무관하므로 끈다.
+      viewer.setStyle({ serial: i }, a.el === 'H' ? {} : { stick: { radius: 0.09, color: '#333' } });
+    } else {
+      viewer.setStyle({ serial: i }, {
+        sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
+        stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
+      });
+    }
   });
+
+  for (const s of labelShapes) viewer.removeLabel(s);
+  labelShapes = state.flat
+    ? state.mol.atoms
+      .filter((a) => a.el !== 'C' && a.el !== 'H') // 탄소는 관례상 라벨 없이 꼭짓점으로만 표시
+      .map((a) => viewer.addLabel(a.el, {
+        position: { x: a.pos[0], y: a.pos[1], z: a.pos[2] },
+        fontColor: '#111', backgroundOpacity: 0, fontSize: 14, inFront: true,
+      }))
+    : [];
+
   // 선택된 원자는 반투명 노란 구로 강조
   for (const i of state.selection) {
-    viewer.addSphere({
+    selectionShapes.push(viewer.addSphere({
       center: { x: state.mol.atoms[i].pos[0], y: state.mol.atoms[i].pos[1], z: state.mol.atoms[i].pos[2] },
       radius: 0.5, color: 'yellow', opacity: 0.35,
-    });
+    }));
   }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
@@ -283,10 +315,10 @@ function playClick(freq = 880) {
   o.stop(audio.currentTime + 0.1);
 }
 
+// 원자가 초과는 이제 canBond가 막지 않으므로(아래 attachAtom 참고) 여기 남은 사유는
+// 데이터 모델상 정말로 의미 없는 경우뿐이다.
 const REASON_MSG = {
   'already-bonded': '이미 결합되어 있습니다',
-  'valence-full-i': '중심 원자의 결합 자리가 가득 찼습니다',
-  'valence-full-j': '붙이려는 원자의 결합 자리가 가득 찼습니다',
   'unsupported-element': '지원하지 않는 원소입니다',
   'same-atom': '같은 원자입니다',
 };
@@ -315,8 +347,11 @@ function attachAtom(anchor) {
   pushUndo();
   const idx2 = addAtom(state.mol, el, add(a, scale(dir, check.targetLength)));
   addBond(state.mol, idx2, anchor, 1);
-  playClick(880);
-  if (check.reason === 'ok-expanded') toast('초원자가 결합 — UFF 정확도 주의', 'err');
+  // 원자가를 넘는 결합은 막지 않는다(레고: 억지로 끼울 순 있되 흔들린다) — 대신 경고하고,
+  // 안정도 HUD의 칩으로 계속 표시된다(snap.stability).
+  if (check.reason === 'ok-overloaded') { playClick(140); toast('불안정: 원자가 초과 — 안정도 HUD 확인', 'err'); }
+  else if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
+  else playClick(880);
 
   if (state.mode === 'learn') minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
   checkSnaps();
@@ -505,11 +540,12 @@ let ghostShapes = [];
 let blinkOn = true;
 setInterval(() => { blinkOn = !blinkOn; if (state.ghost) drawGhost(); }, 400);
 
+// 초록: 정상. 주황: 붙긴 하지만 원자가 초과(초원자가/불안정) 경고. 빨강: 아예 못 붙임.
 function drawGhost() {
   for (const s of ghostShapes) viewer.removeShape(s);
   const g = state.ghost;
   const a = state.mol.atoms[g.anchor].pos;
-  const color = g.ok ? '#22c55e' : '#dc2626';
+  const color = !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
   const opacity = blinkOn ? 0.6 : 0.22;
   ghostShapes = [
     viewer.addSphere({ center: { x: g.pos[0], y: g.pos[1], z: g.pos[2] }, radius: 0.32, color, opacity }),
@@ -620,14 +656,16 @@ document.addEventListener('keydown', (ev) => {
 $('undo').onclick = undo;
 $('duplicate').onclick = duplicateSelection;
 
-// 2D 보기: 원근을 없애 평면 정사영으로 본다. 카메라를 분자 평면에 자동 정렬하지는
-// 않는다 — 드래그로 원하는 면을 바라보면 된다(자동 정렬은 비평면 분자에서 모호해 범위 밖).
+// 2D 보기(골격 구조식): 수소를 숨기고 탄소는 꼭짓점만, 헤테로원자는 문자 라벨로 표시한다
+// (render()가 state.flat을 보고 스타일을 바꾼다). 원근도 없애 정사영으로 본다. 카메라를
+// 분자 평면에 자동 정렬하지는 않는다 — 드래그로 원하는 면을 바라보면 된다
+// (비평면 분자는 "올바른 면"이 모호해 자동 정렬은 범위 밖).
 $('view2d').onclick = () => {
   state.flat = !state.flat;
   viewer.setProjection(state.flat ? 'orthographic' : 'perspective');
-  $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기';
+  $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기(골격식)';
   $('view2d').setAttribute('aria-pressed', String(state.flat));
-  viewer.render();
+  render();
 };
 
 $('mode').onchange = (ev) => {
@@ -636,9 +674,15 @@ $('mode').onchange = (ev) => {
   render();
 };
 
-$('grid').onchange = (ev) => { state.showGrid = ev.target.checked; render(); };
+// 그리드는 render()와 분리된 고정 배경이므로(위 buildGrid 주석 참고) 켜고 끌 때
+// 스스로 만들고 지우기만 하면 된다 — 분자 재계산은 필요 없다.
+$('grid').onchange = (ev) => {
+  state.showGrid = ev.target.checked;
+  if (state.showGrid) buildGrid(); else clearGrid();
+};
 document.body.dataset.mode = state.mode;
 setTool('select');
+if (state.showGrid) buildGrid();
 
 $('preset').innerHTML = Object.entries(PRESETS)
   .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
