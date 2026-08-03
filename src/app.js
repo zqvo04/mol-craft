@@ -1,8 +1,10 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
-import { neighbors, measure } from './model.js';
-import { vseprCheck } from './snap.js';
-import { loadPreset } from './presets.js';
+import { neighbors, measure, addAtom, addBond } from './model.js';
+import { canBond, vseprCheck, newSnapEvents } from './snap.js';
+import { MAX_VALENCE } from './params.js';
+import { loadPreset, PRESETS } from './presets.js';
+import { sub, unit, add, scale, norm, cross, dot } from './geom.js';
 
 const state = {
   mol: loadPreset('methane'),
@@ -135,8 +137,7 @@ function onAtomClick(i) {
   render();
 }
 
-// 하단 알약형 알림. Task 11이 성공/실패 음(playClick)을 추가로 연결할 예정이지만
-// 시그니처(msg, kind)는 이미 그 형태에 맞춰 두었다.
+// 하단 알약형 알림.
 let toastTimer;
 function toast(msg, kind = 'ok') {
   const el = $('toast');
@@ -145,6 +146,108 @@ function toast(msg, kind = 'ok') {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+// 오디오 파일 없이 짧은 클릭음. AudioContext는 하나만 만들어 재사용한다(자동재생 정책 대응).
+let audio;
+function playClick(freq = 880) {
+  audio ??= new (window.AudioContext || window.webkitAudioContext)();
+  if (audio.state === 'suspended') audio.resume().catch(() => {});
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'triangle';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.15, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.09);
+  o.connect(g).connect(audio.destination);
+  o.start();
+  o.stop(audio.currentTime + 0.1);
+}
+
+const REASON_MSG = {
+  'already-bonded': '이미 결합되어 있습니다',
+  'valence-full-i': '중심 원자의 결합 자리가 가득 찼습니다',
+  'valence-full-j': '붙이려는 원자의 결합 자리가 가득 찼습니다',
+  'unsupported-element': '지원하지 않는 원소입니다',
+  'same-atom': '같은 원자입니다',
+};
+
+// 앵커 원자 주위에서 새 원자를 붙일 방향("가장 빈 공간")을 계산한다.
+// 기본은 기존 결합 방향들의 합의 반대. 다만 그 합이 상쇄되거나(선형 2배위, 평면 삼각형
+// 3배위의 정확한 대칭) 잔차가 우연히 기존 결합 한쪽과 거의 같은 방향을 가리키면(예: 3배위가
+// 완벽한 120°에 근접했지만 정확히는 아닐 때) 새 원자가 기존 원자와 겹쳐 버린다(겹친 원자는
+// UFF 기울기가 대칭으로 0이라 minimize()로도 안 풀린다). 그런 경우 기존 결합 중 평행하지
+// 않은 두 벡터의 평면 법선(그 평면을 벗어나는 방향)을 쓴다. 결합이 없거나 전부 한 직선
+// 위(법선을 정의할 평면이 없음)면 임의의 수직 방향.
+function emptyDirection(mol, anchor) {
+  const nb = neighbors(mol, anchor);
+  const a = mol.atoms[anchor].pos;
+  const vecs = nb.map((n) => unit(sub(mol.atoms[n].pos, a)));
+  if (vecs.length === 0) return [1, 0, 0];
+
+  const sum = vecs.reduce((s, v) => sub(s, v), [0, 0, 0]);
+  if (norm(sum) >= 1e-3) {
+    const candidate = unit(sum);
+    if (!vecs.some((v) => dot(candidate, v) > 0.9)) return candidate;
+  }
+  for (let i = 0; i < vecs.length; i++) {
+    for (let j = i + 1; j < vecs.length; j++) {
+      const n = cross(vecs[i], vecs[j]);
+      if (norm(n) > 1e-3) return unit(n);
+    }
+  }
+  const ref = Math.abs(vecs[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  return unit(cross(vecs[0], ref));
+}
+
+// 앵커 원자에 선택된 원소를 붙인다. 결합이 성립하면 UFF 평형 길이로 '자석처럼' 스냅시킨다.
+// 실패 시 방금 추가한 원자를 되돌린다.
+function attachAtom(anchor) {
+  const el = $('element').value;
+  const a = state.mol.atoms[anchor].pos;
+  const dir = emptyDirection(state.mol, anchor);
+
+  const idx = addAtom(state.mol, el, add(a, scale(dir, 2.5)));
+  // canBond(mol, i, j)의 reason 태그는 i=중심/j=신규로 고정된 관례다(snap.test.js 참고).
+  // 인자를 (idx, anchor) 순으로 넣으면 태그가 뒤집혀 REASON_MSG가 반대로 안내한다.
+  const check = canBond(state.mol, anchor, idx);
+  if (!check.ok) {
+    state.mol.atoms.pop();
+    toast(REASON_MSG[check.reason] ?? '결합할 수 없습니다', 'err');
+    playClick(180); // 실패는 낮은 음
+    return;
+  }
+
+  state.mol.atoms[idx].pos = add(a, scale(dir, check.targetLength));
+  addBond(state.mol, idx, anchor, 1);
+  playClick(880);
+  if (check.reason === 'ok-expanded') toast('초원자가 결합 — UFF 정확도 주의', 'err');
+
+  if (state.mode === 'learn') minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
+  checkSnaps();
+  render();
+}
+
+const GEOMETRY_NAME = {
+  2: '직선형', 3: '평면 삼각형', 4: '정사면체', 5: '삼각쌍뿔', 6: '정팔면체',
+};
+
+// 조작 후 VSEPR 만족 상태가 false -> true로 바뀐 중심에만 완성 연출을 낸다.
+// 원소의 정상 원자가(MAX_VALENCE)에 도달한 중심만 평가한다 — 그 전 단계의 중간 배위수는
+// typeAtom이 임시로 sp/sp2(C_1/C_2 등)로 분류해 UFF 이상각과 우연히 일치하며, 메탄을
+// 한 개씩 조립하는 도중 "직선형/평면 삼각형 완성"이 매번 오탐으로 울리는 원인이었다.
+function checkSnaps() {
+  const next = {};
+  for (let i = 0; i < state.mol.atoms.length; i++) {
+    const n = neighbors(state.mol, i).length;
+    const max = MAX_VALENCE[state.mol.atoms[i].el];
+    if (n >= 2 && max !== undefined && n >= max) next[i] = vseprCheck(state.mol, i).satisfied;
+  }
+  for (const idx of newSnapEvents(state.snapState, next)) {
+    const v = vseprCheck(state.mol, Number(idx));
+    playClick(1320); // 성공은 높은 음
+    toast(`${state.mol.atoms[idx].el}${idx}: ${GEOMETRY_NAME[v.coordination]} 완성 (${v.ideal}°)`);
+  }
+  state.snapState = next;
 }
 
 $('scan').onclick = () => {
@@ -181,9 +284,34 @@ $('share').onclick = async () => {
   toast('링크 복사됨');
 };
 
+// 클릭 배선: 학습 모드는 원자 부착, 연구 모드는 측정 선택.
+// atom.serial은 XYZ 모델에서 0-based로 배열 인덱스와 그대로 일치한다(위 onAtomClick 주석 참고).
+viewer.setClickable({}, true, (atom) => {
+  const i = atom.serial;
+  if (state.mode === 'learn') attachAtom(i);
+  else onAtomClick(i);
+});
+
+$('mode').onchange = (ev) => { state.mode = ev.target.value; state.selection = []; render(); };
+
+$('preset').innerHTML = Object.entries(PRESETS)
+  .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+$('preset').onchange = (ev) => {
+  state.mol = loadPreset(ev.target.value);
+  state.selection = [];
+  state.snapState = {};
+  checkSnaps();
+  render();
+  const note = PRESETS[ev.target.value].note;
+  if (note) toast(note);
+};
+
 // 진입 시 URL 해시 복원. 손상된 링크는 조용히 무시하고 기본 프리셋을 유지한다.
 if (location.hash.startsWith('#s=')) {
   try { state.mol = decodeState(location.hash.slice(3)); } catch { /* 손상된 링크는 무시 */ }
 }
 
+// 초기 로드 시점의 VSEPR 만족 상태를 baseline으로 기록해, 이후 첫 실제 클릭에서
+// 이미 완성돼 있던 중심이 오탐(false positive)으로 재발화하지 않게 한다.
+checkSnaps();
 render();
