@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadPreset } from '../src/presets.js';
-import { toXYZ, toMolBlock, toPDB, encodeState, decodeState } from '../src/io.js';
+import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from '../src/io.js';
 
 test('toXYZ 포맷', () => {
   const s = toXYZ(loadPreset('water'), 'test');
@@ -42,4 +42,27 @@ test('encodeState/decodeState 왕복', () => {
 
 test('encodeState 결과가 URL 안전 문자만 포함한다', () => {
   assert.match(encodeState(loadPreset('methane')), /^[A-Za-z0-9\-_]+$/);
+});
+
+test('압축 왕복이 원본을 복원한다', async () => {
+  const m = loadPreset('cyclohexane_chair');
+  const enc = await encodeStateAsync(m);
+  const back = await decodeStateAsync(enc);
+  assert.equal(back.atoms.length, m.atoms.length);
+  assert.deepEqual(back.bonds, m.bonds);
+});
+
+test('압축본이 무압축본보다 짧다', async () => {
+  const m = loadPreset('sf6');
+  assert.ok((await encodeStateAsync(m)).length < encodeState(m).length);
+});
+
+test('무압축 구형 링크도 계속 열린다 (하위 호환)', async () => {
+  const m = loadPreset('water');
+  const back = await decodeStateAsync(encodeState(m)); // 'z' 접두사 없음
+  assert.equal(back.atoms.length, 3);
+});
+
+test('압축 문자열이 URL 안전 문자만 포함한다', async () => {
+  assert.match(await encodeStateAsync(loadPreset('methane')), /^z[A-Za-z0-9\-_]+$/);
 });

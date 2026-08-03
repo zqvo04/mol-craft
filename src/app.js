@@ -1,4 +1,4 @@
-import { toXYZ, toMolBlock, toPDB, encodeState, decodeState } from './io.js';
+import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
 import { neighbors, measure, addAtom, addBond } from './model.js';
 import { canBond, vseprCheck, newSnapEvents } from './snap.js';
@@ -309,7 +309,7 @@ for (const [id, fn, ext] of [
 }
 
 $('share').onclick = async () => {
-  const url = `${location.origin}${location.pathname}#s=${encodeState(state.mol)}`;
+  const url = `${location.origin}${location.pathname}#s=${await encodeStateAsync(state.mol)}`;
   await navigator.clipboard.writeText(url);
   toast('링크 복사됨');
 };
@@ -338,13 +338,18 @@ $('preset').onchange = (ev) => {
 
 // 진입 시 우선순위: URL 해시 > localStorage > 기본 프리셋. 손상된 링크/저장값은
 // 조용히 무시하고 다음 우선순위로 넘어간다.
-if (location.hash.startsWith('#s=')) {
-  try { state.mol = decodeState(location.hash.slice(3)); } catch { /* 손상된 링크는 무시 */ }
-} else {
-  state.mol = restoreLocal() ?? state.mol;
+// decodeStateAsync는 압축 해시일 때만 실제로 await하며(비압축·해시 없음 경로는
+// 동기로 즉시 완료), 두 분기 모두 checkSnaps()/render()를 정확히 한 번만 호출해
+// 잘못된 분자가 먼저 그려지는 플래시를 막는다.
+async function restoreOnLoad() {
+  if (location.hash.startsWith('#s=')) {
+    try { state.mol = await decodeStateAsync(location.hash.slice(3)); } catch { /* 손상된 링크는 무시 */ }
+  } else {
+    state.mol = restoreLocal() ?? state.mol;
+  }
+  // 초기 로드 시점의 VSEPR 만족 상태를 baseline으로 기록해, 이후 첫 실제 클릭에서
+  // 이미 완성돼 있던 중심이 오탐(false positive)으로 재발화하지 않게 한다.
+  checkSnaps();
+  render();
 }
-
-// 초기 로드 시점의 VSEPR 만족 상태를 baseline으로 기록해, 이후 첫 실제 클릭에서
-// 이미 완성돼 있던 중심이 오탐(false positive)으로 재발화하지 않게 한다.
-checkSnaps();
-render();
+restoreOnLoad();

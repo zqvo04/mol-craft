@@ -63,6 +63,39 @@ export function decodeState(str) {
   };
 }
 
+// 브라우저 네이티브 CompressionStream. Node 18+에도 전역으로 있어 테스트가 그대로 돈다.
+// ponytail: pako/fflate 같은 압축 라이브러리를 쓰지 않는다. 플랫폼이 이미 준다.
+async function streamThrough(bytes, stream) {
+  const blob = new Blob([bytes]);
+  const out = blob.stream().pipeThrough(stream);
+  return new Uint8Array(await new Response(out).arrayBuffer());
+}
+
+const bytesToB64url = (u8) =>
+  btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64urlToBytes = (s) =>
+  Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+
+export async function encodeStateAsync(mol) {
+  if (typeof CompressionStream === 'undefined') return encodeState(mol);
+  const json = JSON.stringify({
+    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000)]),
+    b: mol.bonds.map((x) => [x.i, x.j, x.order]),
+  });
+  const packed = await streamThrough(new TextEncoder().encode(json), new CompressionStream('deflate-raw'));
+  return 'z' + bytesToB64url(packed);
+}
+
+export async function decodeStateAsync(str) {
+  if (!str.startsWith('z')) return decodeState(str); // 구버전 무압축 링크
+  const raw = await streamThrough(b64urlToBytes(str.slice(1)), new DecompressionStream('deflate-raw'));
+  const o = JSON.parse(new TextDecoder().decode(raw));
+  return {
+    atoms: o.a.map(([el, x, y, z]) => ({ el, pos: [x, y, z] })),
+    bonds: o.b.map(([i, j, order]) => ({ i, j, order })),
+  };
+}
+
 // SMILES는 정규화 알고리즘이 필요해 직접 구현하지 않는다.
 // 앱에서 버튼을 누를 때만 RDKit JS(WASM, ~8MB)를 동적 로드해 한 줄로 변환한다.
 export async function toSMILES(mol) {
