@@ -5,6 +5,7 @@ import { canBond, vseprCheck, newSnapEvents } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { sub, unit, add, scale, norm, cross, dot } from './geom.js';
+import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 
 const state = {
   mol: loadPreset('methane'),
@@ -314,6 +315,32 @@ $('share').onclick = async () => {
   toast('링크 복사됨');
 };
 
+// 갤러리 제목은 익명 사용자 입력이다. innerHTML에 넣기 전 반드시 이스케이프한다.
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// 단축 링크: 실패하면 해시 링크로 조용히 폴백한다. 사용자는 어쨌든 링크를 얻는다.
+$('share-short').onclick = async () => {
+  const payload = await encodeStateAsync(state.mol);
+  const title = PRESETS[$('preset').value]?.name ?? '';
+  const id = await putShared(payload, title);
+  const url = id
+    ? `${location.origin}${location.pathname}#g=${id}`
+    : `${location.origin}${location.pathname}#s=${payload}`;
+  await navigator.clipboard.writeText(url);
+  toast(id ? '단축 링크 복사됨' : '서버 응답 없음 — 전체 링크로 복사됨', id ? 'ok' : 'err');
+};
+
+// 갤러리는 공유가 켜져 있을 때만 노출한다.
+if (isShareEnabled()) {
+  $('gallery-section').hidden = false;
+  listGallery(20).then((rows) => {
+    $('gallery').innerHTML = rows.length
+      ? rows.map((r) => `<div><a href="#g=${r.id}">${escapeHtml(r.title) || r.id}</a></div>`).join('')
+      : '아직 공유된 구조가 없습니다';
+  });
+}
+
 // 클릭 배선: 학습 모드는 원자 부착, 연구 모드는 측정 선택.
 // atom.serial은 XYZ 모델에서 0-based로 배열 인덱스와 그대로 일치한다(위 onAtomClick 주석 참고).
 viewer.setClickable({}, true, (atom) => {
@@ -342,7 +369,14 @@ $('preset').onchange = (ev) => {
 // 동기로 즉시 완료), 두 분기 모두 checkSnaps()/render()를 정확히 한 번만 호출해
 // 잘못된 분자가 먼저 그려지는 플래시를 막는다.
 async function restoreOnLoad() {
-  if (location.hash.startsWith('#s=')) {
+  if (location.hash.startsWith('#g=')) {
+    const row = await getShared(location.hash.slice(3));
+    if (row) {
+      try { state.mol = await decodeStateAsync(row.payload); } catch { /* 손상된 데이터는 무시 */ }
+    } else {
+      toast('공유 구조를 찾을 수 없습니다', 'err');
+    }
+  } else if (location.hash.startsWith('#s=')) {
     try { state.mol = await decodeStateAsync(location.hash.slice(3)); } catch { /* 손상된 링크는 무시 */ }
   } else {
     state.mol = restoreLocal() ?? state.mol;
