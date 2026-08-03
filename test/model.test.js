@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createMolecule, addAtom, addBond, removeAtom, neighbors,
-  bondOrderSum, branchAtoms, measure, setDihedral,
+  bondOrderSum, branchAtoms, measure, setDihedral, duplicateAtoms,
 } from '../src/model.js';
 
 // n-부탄 골격만(수소 없음): C0-C1-C2-C3, anti 배좌
@@ -76,4 +76,18 @@ test('setDihedral이 고리에서 false를 반환하고 좌표를 바꾸지 않�
   const before = JSON.stringify(m.atoms);
   assert.equal(setDihedral(m, [0, 1, 2, 3], 30), false);
   assert.equal(JSON.stringify(m.atoms), before);
+});
+
+test('duplicateAtoms가 선택 원자와 내부 결합만 복사한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'H', [1, 0, 0]); addAtom(m, 'H', [-1, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 0, 2);
+  const dup = duplicateAtoms(m, [0, 1]); // H(2)는 선택 밖 — 그 결합은 복사되지 않아야 함
+
+  assert.equal(m.atoms.length, 5);
+  assert.equal(dup.length, 2);
+  assert.equal(m.atoms[dup[0]].el, 'C');
+  assert.equal(m.atoms[dup[1]].el, 'H');
+  assert.equal(bondOrderSum(m, dup[0]), 1); // 복제된 C는 복제된 H 하나에만 결합
+  assert.equal(m.atoms[dup[0]].pos[0], 2); // 원본 [0,0,0]에서 x+2만큼 옮겨짐
 });

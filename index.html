@@ -45,10 +45,10 @@
     color: var(--fg);
     display: grid;
     grid-template-columns: 1fr 340px;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     height: 100vh;
   }
-  header {
+  header, #toolbar {
     grid-column: 1 / -1;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
@@ -151,10 +151,9 @@
     aside { border-left: none; border-top: 1px solid var(--border); }
     #disclaimer { max-width: none; text-align: left; margin-left: 0; }
   }
-  /* 연구 모드에서만 보이는 요소(항별 분해, 리플레이, 완화 스캔 등)와
-     학습 모드 전용 요소를 CSS로만 나눈다 — JS 분기 없이 body[data-mode]로 토글. */
+  /* 연구 모드에서만 보이는 분석 패널(항별 분해, 리플레이)을 CSS로만 나눈다 —
+     조립/측정 도구는 이제 모드와 무관하다(도구=클릭 동작, 모드=패널 노출). */
   body[data-mode="learn"] .research-only { display: none; }
-  body[data-mode="research"] .learn-only { display: none; }
   #stability {
     position: absolute; top: 16px; left: 16px;
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 60%;
@@ -169,6 +168,17 @@
   .chip.danger { background: color-mix(in srgb, #dc2626 18%, transparent); color: #dc2626; animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .5; } }
   label.check { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  #tools, #palette { display: flex; gap: 4px; flex-wrap: wrap; }
+  #palette button { min-width: 32px; font-family: var(--font-mono); font-weight: 600; }
+  button.tool.active, #palette button.active {
+    background: var(--primary); color: var(--primary-fg); border-color: var(--primary);
+  }
+  #toolbar-sep { width: 1px; align-self: stretch; background: var(--border); }
+  #boxselect {
+    position: absolute; display: none; pointer-events: none;
+    border: 1px dashed var(--primary);
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+  }
 </style>
 </head>
 <body>
@@ -176,9 +186,6 @@
   <strong>mol-craft</strong>
   <select id="mode"><option value="learn">학습 모드</option><option value="research">연구 모드</option></select>
   <select id="preset"></select>
-  <select id="element" class="learn-only"><option>H</option><option selected>C</option><option>N</option><option>O</option>
-    <option>F</option><option>S</option><option>P</option><option>Cl</option><option>Si</option><option>B</option>
-    <option>Br</option><option>I</option></select>
   <button id="minimize">구조 최적화</button>
   <button id="scan">이면각 스캔</button>
   <select id="scan-step" title="스캔 각도 간격"><option value="5">5°</option><option value="10" selected>10°</option>
@@ -192,9 +199,22 @@
   <button id="share-short">단축 링크</button>
   <span id="disclaimer">UFF 역장 · 진공 · 정전기항 제외 · 정성 비교용(양자계산 대체 아님)</span>
 </header>
+<div id="toolbar">
+  <div id="tools">
+    <button id="tool-select" class="tool active" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
+    <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
+  </div>
+  <div id="toolbar-sep"></div>
+  <div id="palette" title="원소를 고르면 붙이기 도구로 전환됩니다"></div>
+  <div id="toolbar-sep"></div>
+  <button id="undo" title="실행취소 (Ctrl+Z)">↶ 실행취소</button>
+  <button id="duplicate" title="선택 복제 (Ctrl+D)">복제</button>
+  <button id="view2d" aria-pressed="false" title="평면(정사영) 보기 전환">2D 보기</button>
+</div>
 <div id="viewer">
   <div id="toast"></div>
   <div id="stability"></div>
+  <div id="boxselect"></div>
   <div id="legend"><span>응력 낮음</span><span class="bar"></span><span>응력 높음</span></div>
 </div>
 <aside>

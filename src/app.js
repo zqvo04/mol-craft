@@ -1,18 +1,27 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
-import { neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral } from './model.js';
+import {
+  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
+} from './model.js';
 import { canBond, vseprCheck, newSnapEvents, idealDirection, stability } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 
+const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
+
 const state = {
   mol: loadPreset('methane'),
   mode: 'learn',
+  tool: 'select', // 'select' | 'place' | 'erase' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
+  element: 'C',
   selection: [],
   snapState: {},
   showGrid: true,
+  flat: false,
+  ghost: null, // { anchor, pos, ok, reason, el }
+  undoStack: [],
 };
 
 const LS_KEY = 'molcraft:last';
@@ -26,6 +35,25 @@ function restoreLocal() {
   const raw = localStorage.getItem(LS_KEY);
   if (!raw) return null;
   try { return decodeState(raw); } catch { return null; }
+}
+
+// 파괴적 조작(붙이기/삭제/복제) 직전에만 스냅샷을 남긴다. 구조 전체를 문자열로
+// 찍어 쌓는 방식이라 별도 명령 스택이 필요 없다 — io.encodeState가 이미 갖고 있다.
+const UNDO_LIMIT = 20;
+function pushUndo() {
+  state.undoStack.push(encodeState(state.mol));
+  if (state.undoStack.length > UNDO_LIMIT) state.undoStack.shift();
+}
+
+function undo() {
+  const snap = state.undoStack.pop();
+  if (!snap) { toast('되돌릴 것이 없습니다', 'err'); return; }
+  try { state.mol = decodeState(snap); }
+  catch { toast('복원 실패', 'err'); return; }
+  state.selection = [];
+  state.snapState = {};
+  checkSnaps();
+  render();
 }
 
 const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
@@ -43,15 +71,41 @@ document.addEventListener('wheel', (ev) => {
   viewer.render();
 }, { capture: true, passive: false });
 
-// 배경 3D 참조 그리드(XZ 평면, 1 Å 간격). 깊이감 보조용 — 5칸마다 굵은 선.
+// 배경 3D 참조 격자를 정육면체 6면 전부에 그린다(1 Å 간격, 5칸마다 굵은 선).
+// 바닥 한 장뿐이면 뒤에서 볼 때 깊이감이 사라진다 — 방(room) 형태여야 어느 각도로
+// 돌려도 위치 감각이 유지된다.
 function drawGrid() {
   if (!state.showGrid) return;
-  const N = 8, Y = -4;
+  const N = 6;
   for (let i = -N; i <= N; i++) {
     const color = i % 5 === 0 ? '#94a3b8' : '#cbd5e1';
-    viewer.addLine({ start: { x: -N, y: Y, z: i }, end: { x: N, y: Y, z: i }, color });
-    viewer.addLine({ start: { x: i, y: Y, z: -N }, end: { x: i, y: Y, z: N }, color });
+    for (const y of [-N, N]) { // 위/아래(XZ면)
+      viewer.addLine({ start: { x: -N, y, z: i }, end: { x: N, y, z: i }, color });
+      viewer.addLine({ start: { x: i, y, z: -N }, end: { x: i, y, z: N }, color });
+    }
+    for (const z of [-N, N]) { // 앞/뒤(XY면)
+      viewer.addLine({ start: { x: -N, y: i, z }, end: { x: N, y: i, z }, color });
+      viewer.addLine({ start: { x: i, y: -N, z }, end: { x: i, y: N, z }, color });
+    }
+    for (const x of [-N, N]) { // 좌/우(YZ면)
+      viewer.addLine({ start: { x, y: -N, z: i }, end: { x, y: N, z: i }, color });
+      viewer.addLine({ start: { x, y: i, z: -N }, end: { x, y: i, z: N }, color });
+    }
   }
+}
+
+// atom.serial과 동일한 규칙(XYZ 모델 0-based 배열 인덱스)으로 페이지 좌표(pageX/Y)에
+// 가장 가까운 원자를 찾는다. modelToScreen이 canvasOffset(rect+scroll)을 더해 반환하므로
+// clientX/Y가 아니라 pageX/Y와 비교해야 스크롤된 페이지에서도 어긋나지 않는다.
+function pickAtom(px, py, thresholdPx = 24) {
+  let best = -1, bestD = thresholdPx;
+  for (let i = 0; i < state.mol.atoms.length; i++) {
+    const p = state.mol.atoms[i].pos;
+    const s = viewer.modelToScreen({ x: p[0], y: p[1], z: p[2] });
+    const d = Math.hypot(s.x - px, s.y - py);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
 }
 
 // 응력 색상: 낮음(파랑) -> 중간(회백색) -> 높음(빨강).
@@ -116,11 +170,13 @@ function updatePanels(e) {
   $('warn').textContent = hyper
     ? '주의: 초원자가 중심 포함 — UFF는 축/적도 위치를 구분하지 못합니다. 정량 해석 금지.' : '';
 
+  // 측정은 2~4개일 때만 의미가 있다(거리/각도/이면각). 그 이상은 다중 선택 상태만 표시.
   const s = state.selection;
   $('measure').textContent = s.length < 2 ? '원자를 2~4개 클릭'
     : s.length === 2 ? `거리 ${measure(state.mol, s).toFixed(3)} Å`
     : s.length === 3 ? `결합각 ${measure(state.mol, s).toFixed(2)}°`
-    : `이면각 ${measure(state.mol, s).toFixed(2)}°`;
+    : s.length === 4 ? `이면각 ${measure(state.mol, s).toFixed(2)}°`
+    : `${s.length}개 선택됨`;
 
   // VSEPR: 배위수 2 이상인 모든 중심 원자의 이상각 만족 여부.
   const rows = state.mol.atoms.map((_, i) => i)
@@ -195,12 +251,9 @@ function drawScan(points) {
   · 최소 ${min.angle}° · 최대 ${max.angle}°</div>`;
 }
 
-// 선택 배열 관리(최대 4개, 5번째 클릭 시 초기화). 3Dmol의 atom.serial은 XYZ 모델에서
-// 0-based로 배열 인덱스와 그대로 일치하므로 그대로 넘긴다(별도 -1/+1 보정 금지).
-// 클릭 리스너 배선(viewer.setClickable)은 학습/연구 모드 분기가 필요해 Task 11에서 담당한다.
-function onAtomClick(i) {
-  if (state.selection.length >= 4) state.selection = [];
-  if (!state.selection.includes(i)) state.selection.push(i);
+function toggleSelect(i) {
+  const idx = state.selection.indexOf(i);
+  if (idx === -1) state.selection.push(i); else state.selection.splice(idx, 1);
   render();
 }
 
@@ -238,11 +291,12 @@ const REASON_MSG = {
   'same-atom': '같은 원자입니다',
 };
 
-// 앵커 원자에 선택된 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
-// 계산한다(레고처럼 정해진 각도에만 물림). 결합이 성립하면 UFF 평형 길이로 스냅시킨다.
-// 실패 시 방금 추가한 원자를 되돌린다.
+// anchor에 현재 팔레트 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
+// 계산한다(레고처럼 정해진 각도에만 물림) — 붙이기 도구의 고스트 미리보기와 정확히 같은
+// 함수를 써서 "보여준 자리 = 실제로 붙는 자리"가 항상 일치하게 한다.
+// 결합이 성립하면 UFF 평형 길이로 스냅시킨다. 실패 시 방금 추가한 원자를 되돌린다.
 function attachAtom(anchor) {
-  const el = $('element').value;
+  const el = state.element;
   const a = state.mol.atoms[anchor].pos;
   const dir = idealDirection(state.mol, anchor);
 
@@ -257,8 +311,10 @@ function attachAtom(anchor) {
     return;
   }
 
-  state.mol.atoms[idx].pos = add(a, scale(dir, check.targetLength));
-  addBond(state.mol, idx, anchor, 1);
+  state.mol.atoms.pop(); // 시험 삽입 되돌리기 — 되돌린 깨끗한 상태를 undo 스냅샷으로 남긴다
+  pushUndo();
+  const idx2 = addAtom(state.mol, el, add(a, scale(dir, check.targetLength)));
+  addBond(state.mol, idx2, anchor, 1);
   playClick(880);
   if (check.reason === 'ok-expanded') toast('초원자가 결합 — UFF 정확도 주의', 'err');
 
@@ -267,15 +323,42 @@ function attachAtom(anchor) {
   render();
 }
 
-// Shift+클릭으로 원자를 뗀다(레고 분해). 원자가 하나뿐이면 남길 것이 없으니 막는다.
+// 원자 하나를 뗀다(지우개 도구). 원자가 하나뿐이면 남길 것이 없으니 막는다.
 function deleteAtom(i) {
   if (state.mol.atoms.length <= 1) { toast('마지막 원자는 삭제할 수 없습니다', 'err'); return; }
+  pushUndo();
   removeAtom(state.mol, i);
   state.selection = state.selection.filter((s) => s !== i).map((s) => (s > i ? s - 1 : s));
   state.snapState = {};
   playClick(220);
   checkSnaps();
   render();
+}
+
+// 선택된 여러 원자를 한 번에 뗀다(Del 키). 인덱스가 삭제 때마다 밀리므로 내림차순으로 지운다.
+function deleteSelection() {
+  if (state.selection.length === 0) return;
+  if (state.mol.atoms.length - state.selection.length < 1) {
+    toast('전부 지울 수는 없습니다', 'err');
+    return;
+  }
+  pushUndo();
+  for (const i of [...state.selection].sort((a, b) => b - a)) removeAtom(state.mol, i);
+  state.selection = [];
+  state.snapState = {};
+  playClick(220);
+  checkSnaps();
+  render();
+}
+
+// 선택 원자를 복제한다(Ctrl+D). model.duplicateAtoms가 위치·내부 결합을 그대로 복사한다.
+function duplicateSelection() {
+  if (state.selection.length === 0) { toast('복제할 원자를 선택하세요', 'err'); return; }
+  pushUndo();
+  state.selection = duplicateAtoms(state.mol, state.selection);
+  checkSnaps();
+  render();
+  toast('복제됨');
 }
 
 const GEOMETRY_NAME = {
@@ -389,25 +472,173 @@ if (isShareEnabled()) {
   });
 }
 
-// 클릭 배선: 학습 모드는 원자 부착(Shift+클릭은 삭제), 연구 모드는 측정 선택.
-// atom.serial은 XYZ 모델에서 0-based로 배열 인덱스와 그대로 일치한다(위 onAtomClick 주석 참고).
-viewer.setClickable({}, true, (atom, _v, ev) => {
-  const i = atom.serial;
-  if (state.mode === 'learn') {
-    if (ev?.shiftKey) deleteAtom(i);
-    else attachAtom(i);
-  } else onAtomClick(i);
+// ---- 도구 배선 -----------------------------------------------------------
+// 클릭 동작은 이제 모드(학습/연구)가 아니라 도구(선택/붙이기/지우개)가 결정한다.
+// 3Dmol의 setClickable은 버리고 pickAtom(pageX/Y 기반)으로 직접 히트테스트한다 —
+// 붙이기 도구의 실시간 고스트 미리보기와 박스 선택이 같은 좌표계를 써야 어긋나지 않는다.
+
+const viewerEl = $('viewer');
+
+function setTool(tool) {
+  state.tool = tool;
+  clearGhost();
+  document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
+  document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
+}
+
+$('tool-select').onclick = () => setTool('select');
+$('tool-erase').onclick = () => setTool('erase');
+
+$('palette').innerHTML = ELEMENTS.map((el) => `<button data-el="${el}">${el}</button>`).join('');
+$('palette').onclick = (ev) => {
+  const btn = ev.target.closest('button[data-el]');
+  if (!btn) return;
+  state.element = btn.dataset.el;
+  setTool('place');
+};
+
+// ---- 붙이기 고스트 미리보기 -----------------------------------------------
+// idealDirection/canBond를 attachAtom과 똑같이 호출해 "미리 보여준 자리 = 실제로 붙는 자리"를
+// 보장한다. render()는 energy()(O(n²) vdW 포함)를 부르므로 pointermove(고빈도)에서는 절대
+// 쓰지 않고, addSphere/addLine/removeShape만으로 가볍게 갱신한다.
+let ghostShapes = [];
+let blinkOn = true;
+setInterval(() => { blinkOn = !blinkOn; if (state.ghost) drawGhost(); }, 400);
+
+function drawGhost() {
+  for (const s of ghostShapes) viewer.removeShape(s);
+  const g = state.ghost;
+  const a = state.mol.atoms[g.anchor].pos;
+  const color = g.ok ? '#22c55e' : '#dc2626';
+  const opacity = blinkOn ? 0.6 : 0.22;
+  ghostShapes = [
+    viewer.addSphere({ center: { x: g.pos[0], y: g.pos[1], z: g.pos[2] }, radius: 0.32, color, opacity }),
+    viewer.addLine({ start: { x: a[0], y: a[1], z: a[2] }, end: { x: g.pos[0], y: g.pos[1], z: g.pos[2] }, color, dashed: true }),
+  ];
+  viewer.render();
+}
+
+function clearGhost() {
+  if (!state.ghost && ghostShapes.length === 0) return;
+  state.ghost = null;
+  for (const s of ghostShapes) viewer.removeShape(s);
+  ghostShapes = [];
+  viewer.render();
+}
+
+// canBond는 실존 원자 쌍만 받으므로, attachAtom과 같은 시험 삽입/되돌리기 패턴으로
+// "지금 이 앵커에 이 원소를 붙이면 어떻게 되는지"를 부작용 없이 미리 계산한다.
+function previewAttach(anchor, el) {
+  const a = state.mol.atoms[anchor].pos;
+  const dir = idealDirection(state.mol, anchor);
+  const idx = addAtom(state.mol, el, add(a, scale(dir, 2.5)));
+  const check = canBond(state.mol, anchor, idx);
+  state.mol.atoms.pop();
+  const len = check.ok ? check.targetLength : 1.6;
+  return { anchor, pos: add(a, scale(dir, len)), ok: check.ok, reason: check.reason, el };
+}
+
+viewerEl.addEventListener('pointermove', (ev) => {
+  if (state.tool !== 'place') return;
+  const anchor = pickAtom(ev.pageX, ev.pageY, 40);
+  if (anchor === -1) { clearGhost(); return; }
+  state.ghost = previewAttach(anchor, state.element);
+  blinkOn = true;
+  drawGhost();
 });
+viewerEl.addEventListener('pointerleave', () => clearGhost());
+
+// ---- 박스 선택 -------------------------------------------------------------
+// 빈 공간에서 드래그 시작 시 캡처 단계에서 3Dmol의 궤도회전을 가로챈다(휠 보정과 같은 트릭).
+const boxEl = $('boxselect');
+let boxStart = null;
+
+document.addEventListener('pointerdown', (ev) => {
+  if (!viewerEl.contains(ev.target) || state.tool !== 'select') return;
+  if (pickAtom(ev.pageX, ev.pageY, 24) !== -1) return; // 원자 위는 일반 클릭으로 처리
+  ev.preventDefault();
+  ev.stopPropagation();
+  boxStart = { x: ev.pageX, y: ev.pageY, shift: ev.shiftKey };
+  document.addEventListener('pointermove', onBoxMove);
+  document.addEventListener('pointerup', onBoxUp);
+}, { capture: true });
+
+function onBoxMove(ev) {
+  const rect = viewerEl.getBoundingClientRect();
+  const x = Math.min(boxStart.x, ev.pageX) - rect.left - window.scrollX;
+  const y = Math.min(boxStart.y, ev.pageY) - rect.top - window.scrollY;
+  Object.assign(boxEl.style, {
+    display: 'block', left: `${x}px`, top: `${y}px`,
+    width: `${Math.abs(ev.pageX - boxStart.x)}px`, height: `${Math.abs(ev.pageY - boxStart.y)}px`,
+  });
+}
+
+function onBoxUp(ev) {
+  document.removeEventListener('pointermove', onBoxMove);
+  document.removeEventListener('pointerup', onBoxUp);
+  boxEl.style.display = 'none';
+  const dragged = Math.abs(ev.pageX - boxStart.x) > 3 || Math.abs(ev.pageY - boxStart.y) > 3;
+  if (dragged) {
+    const [x0, x1] = [Math.min(boxStart.x, ev.pageX), Math.max(boxStart.x, ev.pageX)];
+    const [y0, y1] = [Math.min(boxStart.y, ev.pageY), Math.max(boxStart.y, ev.pageY)];
+    const hits = [];
+    state.mol.atoms.forEach((atom, i) => {
+      const s = viewer.modelToScreen({ x: atom.pos[0], y: atom.pos[1], z: atom.pos[2] });
+      if (s.x >= x0 && s.x <= x1 && s.y >= y0 && s.y <= y1) hits.push(i);
+    });
+    state.selection = boxStart.shift ? [...new Set([...state.selection, ...hits])] : hits;
+    render();
+  }
+  boxStart = null;
+}
+
+// ---- 일반 클릭(드래그 없는 pointerup) -------------------------------------
+viewerEl.addEventListener('click', (ev) => {
+  if (state.tool === 'place') {
+    if (!state.ghost) return;
+    if (state.ghost.ok) attachAtom(state.ghost.anchor);
+    else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
+    return;
+  }
+  const hit = pickAtom(ev.pageX, ev.pageY, 24);
+  if (hit === -1) return;
+  if (state.tool === 'erase') { deleteAtom(hit); return; }
+  if (ev.shiftKey) toggleSelect(hit);
+  else { state.selection = [hit]; render(); }
+});
+
+// ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
+document.addEventListener('keydown', (ev) => {
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+  if (ev.key === 'Escape') { state.selection = []; render(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'a') { ev.preventDefault(); state.selection = state.mol.atoms.map((_, i) => i); render(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); undo(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'd') { ev.preventDefault(); duplicateSelection(); return; }
+  if (ev.key === 'Delete' || ev.key === 'Backspace') deleteSelection();
+});
+
+$('undo').onclick = undo;
+$('duplicate').onclick = duplicateSelection;
+
+// 2D 보기: 원근을 없애 평면 정사영으로 본다. 카메라를 분자 평면에 자동 정렬하지는
+// 않는다 — 드래그로 원하는 면을 바라보면 된다(자동 정렬은 비평면 분자에서 모호해 범위 밖).
+$('view2d').onclick = () => {
+  state.flat = !state.flat;
+  viewer.setProjection(state.flat ? 'orthographic' : 'perspective');
+  $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기';
+  $('view2d').setAttribute('aria-pressed', String(state.flat));
+  viewer.render();
+};
 
 $('mode').onchange = (ev) => {
   state.mode = ev.target.value;
-  state.selection = [];
   document.body.dataset.mode = state.mode;
   render();
 };
 
 $('grid').onchange = (ev) => { state.showGrid = ev.target.checked; render(); };
 document.body.dataset.mode = state.mode;
+setTool('select');
 
 $('preset').innerHTML = Object.entries(PRESETS)
   .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
