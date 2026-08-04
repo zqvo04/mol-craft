@@ -159,6 +159,10 @@
     background: var(--bg);
     display: flex; align-items: center; justify-content: center;
   }
+  /* ID 선택자(display:flex)가 브라우저 기본 [hidden]{display:none}보다 우선순위가 높아서
+     hidden 속성이 아무 효과가 없었다 — #sketch2d가 항상 3D 뷰어를 불투명하게 덮고 있던
+     원인. hidden일 때만 명시적으로 꺼서 우선순위를 되돌린다. */
+  #sketch2d[hidden] { display: none; }
   #sketch2d svg { max-width: 92%; max-height: 92%; }
   body[data-flat="true"] #legend, body[data-flat="true"] #stability { display: none; }
   #stability {

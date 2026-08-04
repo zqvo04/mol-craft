@@ -123,6 +123,11 @@ test('formula: 있는 원자만 Hill 표기로 센다(메탄 -> CH4)', () => {
   assert.equal(formula(m), 'CH4');
 });
 
+test('formula: 탄소가 없으면 H도 포함해 전부 알파벳순(회귀 — 예전엔 H가 통째로 누락됐다)', () => {
+  assert.equal(formula(loadPreset('water')), 'H2O');
+  assert.equal(formula(loadPreset('ammonia')), 'H3N');
+});
+
 test('implicitH: 결합 수만큼 자동 계산 — 골격식 규칙 2.2 표', () => {
   const m = createMolecule();
   addAtom(m, 'C', [0, 0, 0]);

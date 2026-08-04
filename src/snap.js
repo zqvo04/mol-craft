@@ -217,7 +217,9 @@ export function formula(mol) {
   const counts = {};
   for (const a of mol.atoms) counts[a.el] = (counts[a.el] ?? 0) + 1;
   const rest = Object.keys(counts).filter((e) => e !== 'C' && e !== 'H').sort();
-  const order = counts.C ? ['C', 'H', ...rest] : rest;
+  // 탄소가 있으면 C,H를 먼저 쓰고 나머지 알파벳순(Hill 표기). 탄소가 없으면(암모니아, 물
+  // 등) H를 포함해 전부 알파벳순 — 예전엔 이 분기가 없어 H가 통째로 누락됐다(NH3 -> "N").
+  const order = counts.C ? ['C', 'H', ...rest] : [...rest, 'H'].sort();
   return order.filter((e) => counts[e]).map((e) => e + (counts[e] > 1 ? counts[e] : '')).join('');
 }
 

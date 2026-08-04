@@ -356,7 +356,12 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null } 
   const hasLabel = (i) => mol.atoms[i].el !== 'C';
   const labelText = (i) => {
     const el = mol.atoms[i].el;
-    const h = Math.max(0, implicitH(mol, i));
+    // 이미 실제 H 원자로 붙어있는 것(예: 프리셋)과 아직 안 붙었지만 원자가상 있어야 하는
+    // 것(2D에서 골격만 그린 경우)을 더한다. implicitH만 쓰면 이미 붙어있는 H는 원자가
+    // 결손이 0이라 라벨에서 사라진다(예: 명시적 O-H가 있는데도 라벨이 그냥 "O") —
+    // bondOrderSum이 그 H 결합을 이미 카운트하므로 두 항은 절대 안 겹친다.
+    const explicitH = neighbors(mol, i).filter((n) => mol.atoms[n].el === 'H').length;
+    const h = explicitH + Math.max(0, implicitH(mol, i));
     return h === 0 ? el : `${el}H${h > 1 ? h : ''}`;
   };
 
