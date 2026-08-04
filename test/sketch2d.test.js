@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { layout, findRings, renderSVG } from '../src/sketch2d.js';
+import { layout, findRings, renderSVG, nextChainDir } from '../src/sketch2d.js';
 import { loadPreset } from '../src/presets.js';
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -129,4 +129,58 @@ test('renderSVG: 단원자 분자는 빈 캔버스 대신 분자식 텍스트로
   const svg = renderSVG(loadPreset('methane'));
   assert.ok(svg.includes('>CH4<'));
   assert.equal((svg.match(/<line/g) || []).length, 0);
+});
+
+// ---- 4단계(2D 레고 조립): nextChainDir/renderSVG 히트타깃·고스트 --------------------
+
+test('nextChainDir: 배치된 이웃이 없으면 +x축', () => {
+  const pos = new Map([[0, [3, 4]]]);
+  assert.deepEqual(nextChainDir(createMolecule(), 0, pos, 1), [1, 0]);
+});
+
+test('nextChainDir: 배치된 이웃이 하나면 들어온 방향에서 sign*120도', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  const pos = new Map([[0, [0, 0]], [1, [1, 0]]]);
+  const dPlus = nextChainDir(m, 1, pos, 1);
+  const dMinus = nextChainDir(m, 1, pos, -1);
+  assert.ok(Math.abs(dist([0, 0], dPlus) - 1) < 1e-9); // 단위벡터
+  assert.ok(Math.abs(dPlus[1] + dMinus[1]) < 1e-9); // 부호만 반대(y 성분 대칭)
+});
+
+test('nextChainDir: 배치된 이웃이 둘 이상이면 기존 방향 평균의 반대', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 0, 2); addBond(m, 0, 3);
+  const pos = new Map([[0, [0, 0]], [1, [1, 0]], [2, [-0.5, 1]]]);
+  const dir = nextChainDir(m, 0, pos, 1);
+  assert.ok(dir[0] < 0); // 두 이웃 모두 +x/+y쪽에 있으니 빈 공간은 -x/-y쪽
+});
+
+test('renderSVG: 모든 무거운 원자에 data-atom 히트타깃이 있다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  const svg = renderSVG(m);
+  for (let i = 0; i < 3; i++) assert.ok(svg.includes(`data-atom="${i}"`));
+});
+
+test('renderSVG: ghost 옵션을 주면 미리보기 원과 라벨이 포함된다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]);
+  addBond(m, 0, 1);
+  const withoutGhost = renderSVG(m);
+  const withGhost = renderSVG(m, { ghost: { anchorIdx: 0, el: 'N', ok: true, reason: 'ok' } });
+  assert.ok(!withoutGhost.includes('>N<'));
+  assert.ok(withGhost.includes('>N<'));
+  assert.ok(withGhost.includes('#22c55e')); // ok:true -> 초록
+});
+
+test('renderSVG: ghost.ok가 false면 빨간색으로 표시된다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]);
+  addBond(m, 0, 1);
+  const svg = renderSVG(m, { ghost: { anchorIdx: 0, el: 'N', ok: false, reason: 'already-bonded' } });
+  assert.ok(svg.includes('#dc2626'));
 });

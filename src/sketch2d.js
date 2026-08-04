@@ -158,23 +158,27 @@ function placeRings(rings, pos) {
 }
 
 // 이미 배치된 이웃 개수로 방향을 정한다: 0개(사슬 시작)=+x, 1개(사슬 연장)=들어온 방향에서
-// depth 홀짝 교대로 ±120°(지그재그, 나선 방지), 2개 이상(가지점)=기존 방향들의 반대(빈 공간).
-function placeChainAtom(mol, v, parent, parentDepth, pos) {
+// sign만큼 ±120°(지그재그, 나선 방지), 2개 이상(가지점)=기존 방향들의 반대(빈 공간).
+// placeChainAtom(사슬 성장)과 renderSVG의 2D 고스트 미리보기가 이 함수를 함께 쓴다 —
+// "다음 원자를 어디에 그릴지"가 두 곳에 따로 있으면 나중에 어긋난다.
+export function nextChainDir(mol, parent, pos, sign) {
   const p = pos.get(parent);
   const placedNbrs = heavyNeighbors(mol, parent).filter((n) => pos.has(n));
-  let dir;
-  if (placedNbrs.length === 0) {
-    dir = [1, 0];
-  } else if (placedNbrs.length === 1) {
+  if (placedNbrs.length === 0) return [1, 0];
+  if (placedNbrs.length === 1) {
     // vIn: 부모가 "들어온" 방향(부모 -> 그 이웃). 새 결합과 이루는 내각이 정확히 120°가
     // 되도록 vIn 자체를 120° 회전한다(연장선을 접었을 때 나오는 각도(60°)가 아니다).
     const vIn = unit2(sub2(pos.get(placedNbrs[0]), p));
-    dir = rotate2(vIn, (parentDepth % 2 === 0 ? 1 : -1) * (120 * Math.PI / 180));
-  } else {
-    const avg = placedNbrs.reduce((s, n) => add2(s, unit2(sub2(pos.get(n), p))), [0, 0]);
-    dir = norm2(avg) > 1e-6 ? scale2(unit2(avg), -1) : [1, 0];
+    return rotate2(vIn, sign * (120 * Math.PI / 180));
   }
-  pos.set(v, add2(p, scale2(dir, BOND_LEN)));
+  const avg = placedNbrs.reduce((s, n) => add2(s, unit2(sub2(pos.get(n), p))), [0, 0]);
+  return norm2(avg) > 1e-6 ? scale2(unit2(avg), -1) : [1, 0];
+}
+
+function placeChainAtom(mol, v, parent, parentDepth, pos) {
+  const sign = parentDepth % 2 === 0 ? 1 : -1;
+  const dir = nextChainDir(mol, parent, pos, sign);
+  pos.set(v, add2(pos.get(parent), scale2(dir, BOND_LEN)));
 }
 
 // 이미 배치된 원자들(고리 또는 시드)에서 BFS로 나머지 사슬/가지를 뻗는다.
@@ -273,12 +277,20 @@ function clipToLabels(p, q, pHasLabel, qHasLabel) {
 }
 
 // mol -> 골격식 SVG 문자열. scale: 결합 길이 1 단위 -> 픽셀. 테마 대응은 CSS 변수로.
-export function renderSVG(mol, { scale = 42 } = {}) {
+// ghost: 아직 커밋되지 않은 붙이기 미리보기 { anchorIdx, el, ok, reason, opacity }. 4단계
+// (2D 레고 조립) 전용 — 별도 오버레이 좌표계를 두지 않고 이 함수가 이미 계산한 pos/sx/sy를
+// 그대로 재사용해 좌표계가 어긋날 여지를 없앤다.
+export function renderSVG(mol, { scale = 42, ghost = null } = {}) {
   const pos = layout(mol);
   // 무거운 원자가 0~1개면 선으로 그릴 골격 자체가 없다(메탄 같은 단일 탄소 등) —
   // 골격식은 이 경우 성립하지 않는 표기법이므로 분자식 텍스트로 대신한다.
+  // 붙어있는 원자 하나는 지우개/선택이 동작하도록 히트타깃만 남겨둔다(고스트 미리보기는
+  // 그릴 골격이 없어 지원하지 않음 — 문서화된 한계).
   if (pos.size <= 1) {
-    return `<svg viewBox="0 0 140 40"><text x="70" y="25" text-anchor="middle" font-size="16" `
+    const lone = [...pos.keys()][0];
+    const hit = lone === undefined ? ''
+      : `<circle data-atom="${lone}" cx="70" cy="25" r="16" fill="transparent" style="cursor:pointer"/>`;
+    return `<svg viewBox="0 0 140 40">${hit}<text x="70" y="25" text-anchor="middle" font-size="16" `
       + `fill="var(--fg)" font-family="sans-serif">${formula(mol)}</text></svg>`;
   }
 
@@ -286,6 +298,19 @@ export function renderSVG(mol, { scale = 42 } = {}) {
   const rings = findRings(mol);
   const st = stability(mol);
   const badAtoms = new Set(st.issues.map((x) => x.atom));
+
+  // 고스트 위치도 nextChainDir로 구한다(placeChainAtom과 동일 로직). sign=1 고정 —
+  // 아직 커밋 전이라 실제 BFS 깊이를 알 수 없다(그 깊이는 growChains가 원자를 추가하는
+  // 순간에만 정해진다). 실제로 붙이면 layout()이 처음부터 다시 계산해 최종 지그재그
+  // 방향이 이 미리보기와 달라질 수 있다 — 미리보기는 "대략 이 근처"까지만 보장한다.
+  // bbox 계산(아래)에는 절대 포함시키지 않는다 — 포함시키면 고스트가 나타날 때마다
+  // minX/maxY가 바뀌어 sx/sy가 이동하고, 이미 배치된 원자들의 화면 좌표가 전부 밀려서
+  // 마우스 밑에 있던 히트타깃이 빠져나가 버린다(호버 중 고스트가 깜빡이며 사라지는
+  // 원인이었다). 아래 -1/+1 패딩이 결합 길이 1과 정확히 같아, 실전에서는 고스트가
+  // 대부분 이 여백 안에 들어온다.
+  const ghostPos = ghost && pos.has(ghost.anchorIdx)
+    ? add2(pos.get(ghost.anchorIdx), scale2(nextChainDir(mol, ghost.anchorIdx, pos, 1), BOND_LEN))
+    : null;
 
   const pts = [...pos.values()];
   const minX = Math.min(...pts.map((p) => p[0])) - 1;
@@ -332,6 +357,28 @@ export function renderSVG(mol, { scale = 42 } = {}) {
       + 'fill="none" stroke="#dc2626" stroke-width="1.6"/>';
   }
 
+  // 4단계(2D 레고 조립): 모든 무거운 원자(탄소 포함, 라벨 없어도)에 투명 히트타깃을
+  // 둔다. 히트테스트는 SVG 네이티브 이벤트에 맡긴다 — app.js는 event.target.closest
+  // ('[data-atom]')로 원자 인덱스만 읽으면 된다(3D처럼 좌표 역산 최근접 탐색 불필요).
+  let hitsSvg = '';
+  for (const i of pos.keys()) {
+    const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
+    hitsSvg += `<circle data-atom="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="12" `
+      + 'fill="transparent" style="cursor:pointer"/>';
+  }
+
+  let ghostSvg = '';
+  if (ghostPos) {
+    const [ax, ay] = [sx(pos.get(ghost.anchorIdx)[0]), sy(pos.get(ghost.anchorIdx)[1])];
+    const [gx, gy] = [sx(ghostPos[0]), sy(ghostPos[1])];
+    const color = !ghost.ok ? '#dc2626' : ghost.reason === 'ok' ? '#22c55e' : '#f59e0b';
+    ghostSvg = `<line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${gx.toFixed(1)}" y2="${gy.toFixed(1)}" `
+      + `stroke="${color}" stroke-width="1.6" stroke-dasharray="4 3" opacity="0.7"/>`
+      + `<circle cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="12" fill="${color}" opacity="${ghost.opacity ?? 0.5}"/>`
+      + `<text x="${gx.toFixed(1)}" y="${(gy + 5).toFixed(1)}" text-anchor="middle" font-size="13" `
+      + `fill="var(--fg)" font-family="sans-serif">${ghost.el}</text>`;
+  }
+
   return `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" width="100%" height="100%">`
-    + `${bondsSvg}${labelsSvg}</svg>`;
+    + `${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}</svg>`;
 }

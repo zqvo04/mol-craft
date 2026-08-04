@@ -10,7 +10,7 @@ import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
-import { renderSVG } from './sketch2d.js';
+import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -316,7 +316,9 @@ const REASON_MSG = {
 // 계산한다(레고처럼 정해진 각도에만 물림) — 붙이기 도구의 고스트 미리보기와 정확히 같은
 // 함수를 써서 "보여준 자리 = 실제로 붙는 자리"가 항상 일치하게 한다.
 // 결합이 성립하면 UFF 평형 길이로 스냅시킨다. 실패 시 방금 추가한 원자를 되돌린다.
-function attachAtom(anchor) {
+// pos2d: 2D 골격식 화면에서 붙일 때 sketch2d.layout()이 계산한 좌표를 [x, y, 0]으로
+// 그대로 써서 z=0 평면에 둔다(4단계). 3D 경로(pos2d 없음)는 기존 그대로다.
+function attachAtom(anchor, { pos2d } = {}) {
   const el = state.element;
   const a = state.mol.atoms[anchor].pos;
   const dir = idealDirection(state.mol, anchor);
@@ -334,7 +336,8 @@ function attachAtom(anchor) {
 
   state.mol.atoms.pop(); // 시험 삽입 되돌리기 — 되돌린 깨끗한 상태를 undo 스냅샷으로 남긴다
   pushUndo();
-  const idx2 = addAtom(state.mol, el, add(a, scale(dir, check.targetLength)));
+  const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(dir, check.targetLength));
+  const idx2 = addAtom(state.mol, el, targetPos);
   addBond(state.mol, idx2, anchor, 1);
   // 원자가를 넘는 결합은 막지 않는다(레고: 억지로 끼울 순 있되 흔들린다) — 대신 경고하고,
   // 안정도 HUD의 칩으로 계속 표시된다(snap.stability).
@@ -342,7 +345,9 @@ function attachAtom(anchor) {
   else if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
   else playClick(880);
 
-  if (state.mode === 'learn') minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
+  // pos2d로 붙인 경우는 z=0 평면 배치를 그대로 유지한다 — 여기서 바로 최적화하면
+  // 2D 레이아웃이 흐트러진다. 3D 형태로 풀어주는 건 view2d 핸들러가 2D->3D 전환 시 담당한다.
+  if (state.mode === 'learn' && !pos2d) minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
   checkSnaps();
   render();
 }
@@ -506,6 +511,7 @@ const viewerEl = $('viewer');
 function setTool(tool) {
   state.tool = tool;
   clearGhost();
+  ghost2d = null;
   document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
 }
@@ -617,6 +623,15 @@ function onBoxUp(ev) {
   boxStart = null;
 }
 
+// 지우개/선택 도구의 클릭 동작. 3D 뷰어와 2D SVG 클릭 핸들러가 이 함수를 공유한다
+// (붙이기는 앵커를 찾는 방식이 서로 달라 각자 처리하지만, 이 분기만은 절대 두 군데
+// 따로 두지 않는다 — 나중에 어긋나는 원인이 된다).
+function handleAtomClick(hit, shiftKey) {
+  if (state.tool === 'erase') { deleteAtom(hit); return; }
+  if (shiftKey) toggleSelect(hit);
+  else { state.selection = [hit]; render(); }
+}
+
 // ---- 일반 클릭(드래그 없는 pointerup) -------------------------------------
 viewerEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
@@ -627,9 +642,70 @@ viewerEl.addEventListener('click', (ev) => {
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
   if (hit === -1) return;
-  if (state.tool === 'erase') { deleteAtom(hit); return; }
-  if (ev.shiftKey) toggleSelect(hit);
-  else { state.selection = [hit]; render(); }
+  handleAtomClick(hit, ev.shiftKey);
+});
+
+// ---- 2D 골격식 화면에서의 레고 조립(4단계) ---------------------------------
+// state.tool/state.element/state.selection/undo 스택을 3D와 완전히 재사용한다 — 새
+// 상호작용 모델을 만들지 않는다. 히트테스트는 SVG가 그린 data-atom 히트타깃에 위임한다
+// (3D의 pickAtom 좌표 역산은 3Dmol이 hit-test API를 안 줘서 어쩔 수 없이 쓴 우회로다).
+const sketch2dEl = $('sketch2d');
+let ghost2d = null; // 3D의 state.ghost와 분리된 2D 전용 상태.
+let blink2dOn = true;
+setInterval(() => { blink2dOn = !blink2dOn; if (state.flat && ghost2d) renderFlat(); }, 400);
+
+// canBond는 위치가 아니라 원자가·타입만 보므로(snap.js 참고) 좌표 없는 시험 삽입으로 충분하다.
+function previewAttach2D(anchor, el) {
+  const idx = addAtom(state.mol, el, [0, 0, 0]);
+  const check = canBond(state.mol, anchor, idx);
+  state.mol.atoms.pop();
+  return { anchorIdx: anchor, el, ok: check.ok, reason: check.reason };
+}
+
+// render()(energy() 포함, O(n²))를 부르지 않는 경량 갱신 — pointermove/깜빡임 전용.
+function renderFlat() {
+  if (!state.flat) return;
+  const ghost = ghost2d && { ...ghost2d, opacity: blink2dOn ? 0.6 : 0.22 };
+  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost });
+}
+
+// sketch2d.layout()의 nextChainDir로 새 원자의 2D 좌표를 구해 그대로 pos([x,y,0])로 쓴다
+// (attachAtom 주석 참고). 방향 계산 자체는 layout()/고스트 미리보기와 동일 함수를 쓴다.
+function attachAtom2D(anchor) {
+  const pos = layout(state.mol);
+  if (!pos.has(anchor)) return;
+  const dir = nextChainDir(state.mol, anchor, pos, 1);
+  const p = pos.get(anchor);
+  attachAtom(anchor, { pos2d: [p[0] + dir[0], p[1] + dir[1]] });
+}
+
+sketch2dEl.addEventListener('pointermove', (ev) => {
+  if (!state.flat || state.tool !== 'place') return;
+  const hit = ev.target.closest('[data-atom]');
+  if (!hit) { if (ghost2d) { ghost2d = null; renderFlat(); } return; }
+  ghost2d = previewAttach2D(Number(hit.dataset.atom), state.element);
+  blink2dOn = true;
+  renderFlat();
+});
+sketch2dEl.addEventListener('pointerleave', () => {
+  if (!state.flat || !ghost2d) return;
+  ghost2d = null;
+  renderFlat();
+});
+
+sketch2dEl.addEventListener('click', (ev) => {
+  if (!state.flat) return;
+  const hit = ev.target.closest('[data-atom]');
+  if (!hit) return;
+  const idx = Number(hit.dataset.atom);
+  if (state.tool === 'place') {
+    if (!ghost2d) return;
+    if (ghost2d.ok) attachAtom2D(idx);
+    else toast(REASON_MSG[ghost2d.reason] ?? '결합할 수 없습니다', 'err');
+    ghost2d = null;
+    return;
+  }
+  handleAtomClick(idx, ev.shiftKey);
 });
 
 // ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
