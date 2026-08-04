@@ -309,7 +309,10 @@ function clipToLabels(p, q, pHasLabel, qHasLabel) {
 // ghost: 아직 커밋되지 않은 붙이기 미리보기 { anchorIdx, el, ok, reason, opacity }. 4단계
 // (2D 레고 조립) 전용 — 별도 오버레이 좌표계를 두지 않고 이 함수가 이미 계산한 pos/sx/sy를
 // 그대로 재사용해 좌표계가 어긋날 여지를 없앤다.
-export function renderSVG(mol, { scale = 42, ghost = null } = {}) {
+// bondPreview: '결합' 도구(기존 원자끼리 잇기 = 고리 닫기) 전용 { a, b, ok }. ghost(새 원자
+// 붙이기)와 구조가 다르다 — a/b 둘 다 이미 존재하는 원자 인덱스이고 새 원자는 만들지 않는다.
+// b가 아직 없으면(앵커만 찍고 커서를 아직 다른 원자 위로 안 옮긴 상태) 앵커 강조 원만 그린다.
+export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null } = {}) {
   const pos = layout(mol);
   // 무거운 원자가 0~1개면 선으로 그릴 골격 자체가 없다(메탄 같은 단일 탄소 등) —
   // 골격식은 이 경우 성립하지 않는 표기법이므로 분자식 텍스트로 대신한다.
@@ -428,6 +431,19 @@ export function renderSVG(mol, { scale = 42, ghost = null } = {}) {
       + `fill="var(--fg)" font-family="sans-serif">${ghost.el}</text>`;
   }
 
+  let bondPreviewSvg = '';
+  if (bondPreview && pos.has(bondPreview.a)) {
+    const [ax, ay] = [sx(pos.get(bondPreview.a)[0]), sy(pos.get(bondPreview.a)[1])];
+    bondPreviewSvg = `<circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="14" fill="none" stroke="#38bdf8" stroke-width="2.5"/>`;
+    if (bondPreview.b != null && pos.has(bondPreview.b)) {
+      const [bx, by] = [sx(pos.get(bondPreview.b)[0]), sy(pos.get(bondPreview.b)[1])];
+      const color = bondPreview.ok ? '#22c55e' : '#dc2626';
+      bondPreviewSvg += `<line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" `
+        + `stroke="${color}" stroke-width="1.6" stroke-dasharray="4 3" opacity="0.8"/>`
+        + `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="14" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    }
+  }
+
   return `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" width="100%" height="100%">`
-    + `${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}</svg>`;
+    + `${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}${bondPreviewSvg}</svg>`;
 }

@@ -17,13 +17,14 @@ const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I']
 const state = {
   mol: loadPreset('methane'),
   mode: 'learn',
-  tool: 'select', // 'select' | 'place' | 'erase' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
+  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
   element: 'C',
   selection: [],
   snapState: {},
   showGrid: true,
   flat: false,
   ghost: null, // { anchor, pos, ok, reason, el }
+  pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
   undoStack: [],
 };
 
@@ -136,6 +137,7 @@ export function strainColor(v, vmax) {
 
 let firstRender = true;
 let selectionShapes = []; // render()가 만드는 노란 강조 구 — 이 배열만 지웠다 다시 그린다.
+let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
 
 function render() {
   const e = energy(state.mol);
@@ -163,12 +165,24 @@ function render() {
       radius: 0.5, color: 'yellow', opacity: 0.35,
     }));
   }
+  // '결합' 도구로 찍어둔 대기 중인 앵커는 하늘색 구로 강조(선택 강조와 같은 패턴, 다른 색).
+  if (state.pendingBond !== null) {
+    const p = state.mol.atoms[state.pendingBond].pos;
+    selectionShapes.push(viewer.addSphere({
+      center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
+    }));
+  }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
   updatePanels(e);
   // 골격식(2D) 보기가 켜져 있으면 3D 뷰어 위에 SVG를 계속 최신 상태로 덮어 그린다.
   // 3Dmol 스타일을 흉내내는 대신 sketch2d.renderSVG(진짜 골격식 규칙)를 그대로 쓴다.
-  if (state.flat) $('sketch2d').innerHTML = renderSVG(state.mol);
+  if (state.flat) {
+    const bondPreview = state.tool === 'bond' && state.pendingBond !== null
+      ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
+      : null;
+    $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview });
+  }
   saveLocal();
 }
 
@@ -512,12 +526,15 @@ function setTool(tool) {
   state.tool = tool;
   clearGhost();
   ghost2d = null;
+  state.pendingBond = null;
+  bondHover2d = null;
   document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
 }
 
 $('tool-select').onclick = () => setTool('select');
 $('tool-erase').onclick = () => setTool('erase');
+$('tool-bond').onclick = () => setTool('bond');
 
 $('palette').innerHTML = ELEMENTS.map((el) => `<button data-el="${el}">${el}</button>`).join('');
 $('palette').onclick = (ev) => {
@@ -628,8 +645,32 @@ function onBoxUp(ev) {
 // 따로 두지 않는다 — 나중에 어긋나는 원인이 된다).
 function handleAtomClick(hit, shiftKey) {
   if (state.tool === 'erase') { deleteAtom(hit); return; }
+  if (state.tool === 'bond') { handleBondClick(hit); return; }
   if (shiftKey) toggleSelect(hit);
   else { state.selection = [hit]; render(); }
+}
+
+// '결합' 도구: 첫 클릭은 앵커를 대기시키고, 두 번째 클릭이 그 앵커를 실제로 잇는다
+// (같은 원자를 다시 클릭하면 대기 취소). 기존 원자 두 개를 잇는 유일한 경로 — 이게
+// 있어야 사슬을 고리로 닫을 수 있다(findRings/layout은 이미 임의 고리 위상을 다룬다).
+function handleBondClick(hit) {
+  if (state.pendingBond === hit) { state.pendingBond = null; bondHover2d = null; render(); return; }
+  if (state.pendingBond === null) { state.pendingBond = hit; render(); return; }
+  const anchor = state.pendingBond;
+  state.pendingBond = null;
+  bondHover2d = null;
+  const check = canBond(state.mol, anchor, hit);
+  if (!check.ok) {
+    toast(REASON_MSG[check.reason] ?? '결합할 수 없습니다', 'err');
+    playClick(180);
+    render();
+    return;
+  }
+  pushUndo();
+  addBond(state.mol, anchor, hit, 1);
+  playClick(880);
+  checkSnaps();
+  render();
 }
 
 // ---- 일반 클릭(드래그 없는 pointerup) -------------------------------------
@@ -666,7 +707,10 @@ function previewAttach2D(anchor, el) {
 function renderFlat() {
   if (!state.flat) return;
   const ghost = ghost2d && { ...ghost2d, opacity: blink2dOn ? 0.6 : 0.22 };
-  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost });
+  const bondPreview = state.tool === 'bond' && state.pendingBond !== null
+    ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
+    : null;
+  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview });
 }
 
 // sketch2d.layout()의 nextChainDir로 새 원자의 2D 좌표를 구해 그대로 pos([x,y,0])로 쓴다
@@ -693,6 +737,23 @@ sketch2dEl.addEventListener('pointerleave', () => {
   renderFlat();
 });
 
+// '결합' 도구: 앵커를 찍은 뒤 커서가 올라간 원자를 bondHover2d에 담아 점선 미리보기를
+// 그린다(renderSVG의 bondPreview 옵션 — ghost와는 별개 구조, "새 원자 붙이기"가 아니라
+// "기존 원자끼리 잇기"라 의미가 다르다).
+sketch2dEl.addEventListener('pointermove', (ev) => {
+  if (!state.flat || state.tool !== 'bond' || state.pendingBond === null) return;
+  const hit = ev.target.closest('[data-atom]');
+  const idx = hit ? Number(hit.dataset.atom) : null;
+  if (idx === bondHover2d) return;
+  bondHover2d = idx;
+  renderFlat();
+});
+sketch2dEl.addEventListener('pointerleave', () => {
+  if (!state.flat || bondHover2d === null) return;
+  bondHover2d = null;
+  renderFlat();
+});
+
 sketch2dEl.addEventListener('click', (ev) => {
   if (!state.flat) return;
   const hit = ev.target.closest('[data-atom]');
@@ -711,7 +772,7 @@ sketch2dEl.addEventListener('click', (ev) => {
 // ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
 document.addEventListener('keydown', (ev) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-  if (ev.key === 'Escape') { state.selection = []; render(); return; }
+  if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'a') { ev.preventDefault(); state.selection = state.mol.atoms.map((_, i) => i); render(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); undo(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'd') { ev.preventDefault(); duplicateSelection(); return; }
