@@ -154,6 +154,13 @@
   /* 연구 모드에서만 보이는 분석 패널(항별 분해, 리플레이)을 CSS로만 나눈다 —
      조립/측정 도구는 이제 모드와 무관하다(도구=클릭 동작, 모드=패널 노출). */
   body[data-mode="learn"] .research-only { display: none; }
+  #sketch2d {
+    position: absolute; inset: 0; z-index: 5;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #sketch2d svg { max-width: 92%; max-height: 92%; }
+  body[data-flat="true"] #legend, body[data-flat="true"] #stability { display: none; }
   #stability {
     position: absolute; top: 16px; left: 16px;
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 60%;
@@ -203,19 +210,21 @@
   <div id="tools">
     <button id="tool-select" class="tool active" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
     <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
+    <button id="tool-bond" class="tool" data-tool="bond" title="결합: 원자 두 개를 순서대로 클릭해 잇기(고리 닫기)">결합</button>
   </div>
   <div id="toolbar-sep"></div>
   <div id="palette" title="원소를 고르면 붙이기 도구로 전환됩니다"></div>
   <div id="toolbar-sep"></div>
   <button id="undo" title="실행취소 (Ctrl+Z)">↶ 실행취소</button>
   <button id="duplicate" title="선택 복제 (Ctrl+D)">복제</button>
-  <button id="view2d" aria-pressed="false" title="골격 구조식 보기 전환(수소 숨김, 헤테로원자 라벨)">2D 보기</button>
+  <button id="view2d" aria-pressed="false" title="골격 구조식(스켈레탈 포뮬러) 보기 전환">2D 보기</button>
 </div>
 <div id="viewer">
   <div id="toast"></div>
   <div id="stability"></div>
   <div id="boxselect"></div>
   <div id="legend"><span>응력 낮음</span><span class="bar"></span><span>응력 높음</span></div>
+  <div id="sketch2d" hidden></div>
 </div>
 <aside>
   <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>

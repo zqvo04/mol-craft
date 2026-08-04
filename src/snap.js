@@ -1,4 +1,6 @@
-import { neighbors, bondOrderSum, bondBetween } from './model.js';
+import {
+  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom,
+} from './model.js';
 import { MAX_VALENCE, EXPANDED_VALENCE } from './params.js';
 import { typeAtom, bondLength } from './uff.js';
 import { sub, unit, scale, add, distance, angleDeg, cross, dot, norm } from './geom.js';
@@ -197,4 +199,59 @@ export function stability(mol) {
     - issues.filter((x) => x.level === 'warn').length * 12
     - issues.filter((x) => x.level === 'danger').length * 22);
   return { score, issues };
+}
+
+// 골격식 규칙 2.2: "결합 수에 따라 자동 계산"한 H 개수. bondOrderSum은 이미 존재하는
+// H 결합까지 포함해 실제 사용 원자가를 그대로 반영하므로, 원소별 채워야 할 나머지가
+// 바로 나온다(음수면 원자가 초과 — syncHydrogens가 그만큼 뗀다).
+export function implicitH(mol, i) {
+  const max = MAX_VALENCE[mol.atoms[i].el];
+  return max === undefined ? 0 : max - bondOrderSum(mol, i);
+}
+
+// Hill 표기 분자식(탄소 있으면 C, H 먼저 → 나머지 알파벳순; 없으면 전부 알파벳순).
+// mol.atoms를 있는 그대로 센다 — "생략된" H를 추론하지 않는다. 이 앱의 데이터 모델은
+// H도 항상 실제 원자이므로(UFF가 이웃 수로 원자 타입을 정하기 때문에 그래야 한다),
+// 골격식이 숨기는 것은 어디까지나 "그리기"일 뿐 데이터가 아니다.
+export function formula(mol) {
+  const counts = {};
+  for (const a of mol.atoms) counts[a.el] = (counts[a.el] ?? 0) + 1;
+  const rest = Object.keys(counts).filter((e) => e !== 'C' && e !== 'H').sort();
+  const order = counts.C ? ['C', 'H', ...rest] : rest;
+  return order.filter((e) => counts[e]).map((e) => e + (counts[e] > 1 ? counts[e] : '')).join('');
+}
+
+// 골격식 규칙 3(해석): 무거운 원자마다 부족한 H를 실제 원자로 채우고, 원자가를 넘겨
+// 붙어있는 H는 뗀다. 2D에서 탄소 골격만 그려도(사용자가 H를 신경 쓸 필요 없이) 이 함수
+// 한 번으로 3D 최적화가 가능한 완전한 분자가 된다 — 2D/3D 사이에 별도 좌표 변환은 없다.
+export function syncHydrogens(mol) {
+  // 1단계: 부족분을 채운다. addAtom은 끝에만 추가하므로 이 루프가 도는 동안
+  // 기존(무거운 원자의) 인덱스는 절대 밀리지 않는다 — 새로 붙인 H를 다시 순회하지도 않는다.
+  const heavyCount = mol.atoms.length;
+  for (let i = 0; i < heavyCount; i++) {
+    if (mol.atoms[i].el === 'H') continue;
+    let deficit = implicitH(mol, i);
+    while (deficit > 0) {
+      const dir = idealDirection(mol, i);
+      const len = bondLength(typeAtom(mol, i), 'H_', 1);
+      const idx = addAtom(mol, 'H', add(mol.atoms[i].pos, scale(dir, len)));
+      addBond(mol, i, idx, 1);
+      deficit--;
+    }
+  }
+
+  // 2단계: 원자가 초과분을 뗀다. removeAtom은 인덱스를 재정렬하므로, 지울 대상을 전부
+  // 모아 내림차순 한 번에 처리한다(app.js의 다중 삭제와 동일한 안전 패턴).
+  const toRemove = [];
+  for (let i = 0; i < mol.atoms.length; i++) {
+    if (mol.atoms[i].el === 'H') continue;
+    let deficit = implicitH(mol, i);
+    if (deficit >= 0) continue;
+    for (const h of neighbors(mol, i).filter((n) => mol.atoms[n].el === 'H')) {
+      if (deficit >= 0) break;
+      toRemove.push(h);
+      deficit++;
+    }
+  }
+  for (const i of [...new Set(toRemove)].sort((a, b) => b - a)) removeAtom(mol, i);
 }
