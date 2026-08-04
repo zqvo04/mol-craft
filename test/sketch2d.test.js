@@ -103,6 +103,16 @@ test('renderSVG 규칙 2.2: 헤테로원자 H 개수는 implicitH로 접어 표�
   assert.ok(renderSVG(m).includes('>OH<')); // O는 결합 1개뿐 -> 나머지 1개는 H
 });
 
+test('renderSVG: 이미 실제 H 원자로 붙어있어도 라벨에서 사라지지 않는다(회귀)', () => {
+  // implicitH만 쓰면 이미 붙은 H는 원자가 결손이 0이라 라벨이 그냥 "O"가 돼버렸다.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  const h = addAtom(m, 'H', [0, 0, 0]);
+  addBond(m, 2, h);
+  assert.ok(renderSVG(m).includes('>OH<'));
+});
+
 test('renderSVG 규칙 2.3: 결합 차수만큼 평행선(단일1/이중2/삼중3)', () => {
   const single = createMolecule();
   addAtom(single, 'C', [0, 0, 0]); addAtom(single, 'C', [0, 0, 0]); addBond(single, 0, 1, 1);
