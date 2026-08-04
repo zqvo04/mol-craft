@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMolecule, addAtom, addBond } from '../src/model.js';
+import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, stability,
+  implicitH, formula, syncHydrogens,
 } from '../src/snap.js';
 import { distance, angleDeg } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -115,4 +116,56 @@ test('stability: 최적화된 메탄은 100점, 초원자가 SF6는 감점된다
   const s = stability(sf6);
   assert.ok(s.score < 100);
   assert.ok(s.issues.some((x) => x.msg.includes('초원자가')));
+});
+
+test('formula: 있는 원자만 Hill 표기로 센다(메탄 -> CH4)', () => {
+  const m = loadPreset('methane');
+  assert.equal(formula(m), 'CH4');
+});
+
+test('implicitH: 결합 수만큼 자동 계산 — 골격식 규칙 2.2 표', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.5, 0, 0]);
+  addBond(m, 0, 1); // C0는 결합 1개 -> CH3
+  assert.equal(implicitH(m, 0), 3);
+  assert.equal(implicitH(m, 1), 3);
+});
+
+test('syncHydrogens: 골격만 그린 에탄올(C-C-O)에서 C2H6O를 만든다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.5, 0, 0]);
+  addAtom(m, 'O', [3.0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  syncHydrogens(m);
+  assert.equal(formula(m), 'C2H6O');
+  // 골격식 규칙 3: 채운 뒤 모든 무거운 원자의 원자가가 정확히 찬다.
+  for (let i = 0; i < 3; i++) assert.equal(implicitH(m, i), 0);
+});
+
+test('syncHydrogens: 원자가를 넘겨 붙은 H는 뗀다(CH5 -> CH4)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  for (let k = 0; k < 5; k++) {
+    const idx = addAtom(m, 'H', [k + 1, 0, 0]);
+    addBond(m, 0, idx);
+  }
+  assert.equal(formula(m), 'CH5');
+  syncHydrogens(m);
+  assert.equal(formula(m), 'CH4');
+  assert.equal(neighbors(m, 0).length, 4);
+});
+
+test('syncHydrogens: 두 번 불러도 결과가 같다(멱등)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'O', [1.4, 0, 0]);
+  addBond(m, 0, 1);
+  syncHydrogens(m);
+  const f1 = formula(m);
+  const n1 = m.atoms.length;
+  syncHydrogens(m);
+  assert.equal(formula(m), f1);
+  assert.equal(m.atoms.length, n1);
 });
