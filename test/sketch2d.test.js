@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { layout, findRings } from '../src/sketch2d.js';
+import { layout, findRings, renderSVG } from '../src/sketch2d.js';
+import { loadPreset } from '../src/presets.js';
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const angleDeg = (a, b, c) => {
@@ -84,4 +85,48 @@ test('layout: 원자 하나짜리 분자도 처리한다', () => {
   addAtom(m, 'C', [5, 5, 5]);
   const pos = layout(m);
   assert.deepEqual(pos.get(0), [0, 0]);
+});
+
+test('renderSVG 규칙 2.1/2.4: 탄소는 라벨 없고, 헤테로원자는 있다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  const svg = renderSVG(m);
+  assert.equal((svg.match(/<text/g) || []).length, 1); // O만
+  assert.ok(svg.includes('>OH<') || svg.includes('>O<'));
+});
+
+test('renderSVG 규칙 2.2: 헤테로원자 H 개수는 implicitH로 접어 표기(에탄올 골격 -> OH)', () => {
+  const m = createMolecule(); // C-C-O, H 하나도 안 그림(골격만)
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [0, 0, 0]);
+  addBond(m, 0, 1); addBond(m, 1, 2);
+  assert.ok(renderSVG(m).includes('>OH<')); // O는 결합 1개뿐 -> 나머지 1개는 H
+});
+
+test('renderSVG 규칙 2.3: 결합 차수만큼 평행선(단일1/이중2/삼중3)', () => {
+  const single = createMolecule();
+  addAtom(single, 'C', [0, 0, 0]); addAtom(single, 'C', [0, 0, 0]); addBond(single, 0, 1, 1);
+  assert.equal((renderSVG(single).match(/<line/g) || []).length, 1);
+
+  const dbl = createMolecule();
+  addAtom(dbl, 'C', [0, 0, 0]); addAtom(dbl, 'C', [0, 0, 0]); addBond(dbl, 0, 1, 2);
+  assert.equal((renderSVG(dbl).match(/<line/g) || []).length, 2);
+
+  const triple = createMolecule();
+  addAtom(triple, 'C', [0, 0, 0]); addAtom(triple, 'C', [0, 0, 0]); addBond(triple, 0, 1, 3);
+  assert.equal((renderSVG(triple).match(/<line/g) || []).length, 3);
+});
+
+test('renderSVG: 원자가 초과 원자는 붉은 경고 표식', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, 0]);
+  for (let k = 0; k < 4; k++) { const h = addAtom(m, 'H', [k, 1, 0]); addBond(m, 0, h); }
+  addBond(m, 0, 1); // C0: 결합 5개 -> 원자가 초과
+  assert.ok(renderSVG(m).includes('#dc2626'));
+});
+
+test('renderSVG: 단원자 분자는 빈 캔버스 대신 분자식 텍스트로 대신한다(메탄 -> CH4)', () => {
+  const svg = renderSVG(loadPreset('methane'));
+  assert.ok(svg.includes('>CH4<'));
+  assert.equal((svg.match(/<line/g) || []).length, 0);
 });

@@ -3,11 +3,14 @@ import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
 import {
   neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
 } from './model.js';
-import { canBond, vseprCheck, newSnapEvents, idealDirection, stability } from './snap.js';
+import {
+  canBond, vseprCheck, newSnapEvents, idealDirection, stability, syncHydrogens,
+} from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
+import { renderSVG } from './sketch2d.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -133,7 +136,6 @@ export function strainColor(v, vmax) {
 
 let firstRender = true;
 let selectionShapes = []; // render()가 만드는 노란 강조 구 — 이 배열만 지웠다 다시 그린다.
-let labelShapes = []; // 골격 구조식(2D) 모드의 헤테로원자 라벨.
 
 function render() {
   const e = energy(state.mol);
@@ -148,27 +150,11 @@ function render() {
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
   state.mol.atoms.forEach((a, i) => {
-    if (state.flat) {
-      // 골격 구조식: 수소는 암묵적으로 숨기고(결합선도 함께 사라짐), 탄소는 꼭짓점만으로
-      // 표시한다(구 없음). 응력 색은 이 보기의 목적과 무관하므로 끈다.
-      viewer.setStyle({ serial: i }, a.el === 'H' ? {} : { stick: { radius: 0.09, color: '#333' } });
-    } else {
-      viewer.setStyle({ serial: i }, {
-        sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
-        stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
-      });
-    }
+    viewer.setStyle({ serial: i }, {
+      sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
+      stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
+    });
   });
-
-  for (const s of labelShapes) viewer.removeLabel(s);
-  labelShapes = state.flat
-    ? state.mol.atoms
-      .filter((a) => a.el !== 'C' && a.el !== 'H') // 탄소는 관례상 라벨 없이 꼭짓점으로만 표시
-      .map((a) => viewer.addLabel(a.el, {
-        position: { x: a.pos[0], y: a.pos[1], z: a.pos[2] },
-        fontColor: '#111', backgroundOpacity: 0, fontSize: 14, inFront: true,
-      }))
-    : [];
 
   // 선택된 원자는 반투명 노란 구로 강조
   for (const i of state.selection) {
@@ -180,6 +166,9 @@ function render() {
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
   updatePanels(e);
+  // 골격식(2D) 보기가 켜져 있으면 3D 뷰어 위에 SVG를 계속 최신 상태로 덮어 그린다.
+  // 3Dmol 스타일을 흉내내는 대신 sketch2d.renderSVG(진짜 골격식 규칙)를 그대로 쓴다.
+  if (state.flat) $('sketch2d').innerHTML = renderSVG(state.mol);
   saveLocal();
 }
 
@@ -656,15 +645,19 @@ document.addEventListener('keydown', (ev) => {
 $('undo').onclick = undo;
 $('duplicate').onclick = duplicateSelection;
 
-// 2D 보기(골격 구조식): 수소를 숨기고 탄소는 꼭짓점만, 헤테로원자는 문자 라벨로 표시한다
-// (render()가 state.flat을 보고 스타일을 바꾼다). 원근도 없애 정사영으로 본다. 카메라를
-// 분자 평면에 자동 정렬하지는 않는다 — 드래그로 원하는 면을 바라보면 된다
-// (비평면 분자는 "올바른 면"이 모호해 자동 정렬은 범위 밖).
+// 2D 보기: sketch2d.renderSVG가 그리는 진짜 골격 구조식으로 3D 뷰어를 덮는다(3Dmol
+// 스타일 흉내가 아니라 완전히 별도 SVG 렌더러 — layout()이 만든 좌표를 그대로 그린다).
+// 3D -> 2D는 좌표만 안 그릴 뿐 데이터는 그대로라 변환이 필요 없다. 2D -> 3D로 돌아갈 때는
+// syncHydrogens()를 한 번 불러 완전한 분자로 만든다(골격식 규칙 3: 해석 = 부족한 원자가를
+// 채우는 것) — 지금은 항상 이미 포화 상태라 사실상 무연산이지만, 나중에 2D에서 탄소
+// 골격만 그리고 3D로 넘어오는 편집 흐름이 생기면 이 한 줄이 그 완성을 담당한다.
 $('view2d').onclick = () => {
   state.flat = !state.flat;
-  viewer.setProjection(state.flat ? 'orthographic' : 'perspective');
+  document.body.dataset.flat = String(state.flat);
+  $('sketch2d').hidden = !state.flat;
   $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기(골격식)';
   $('view2d').setAttribute('aria-pressed', String(state.flat));
+  if (!state.flat) { syncHydrogens(state.mol); minimize(state.mol, { maxSteps: 120 }); }
   render();
 };
 

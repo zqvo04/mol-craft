@@ -1,4 +1,5 @@
 import { neighbors } from './model.js';
+import { implicitH, stability, formula } from './snap.js';
 
 // 골격식 2D 좌표 생성. 결합 길이 1(무단위 — 렌더러가 원하는 배율로 스케일).
 // 원자 인덱스 -> [x, y] Map을 돌려준다(직렬화 안 함, 로드/편집 때마다 다시 계산).
@@ -211,4 +212,126 @@ export function layout(mol) {
 
   growChains(mol, pos);
   return pos;
+}
+
+// ---- SVG 렌더링 -------------------------------------------------------------
+// 규칙 2.1: 탄소는 절대 라벨 없음(꼭짓점=선의 끝/꺾임점으로만 표현).
+// 규칙 2.2: 탄소의 H는 그리지 않는다(꼭짓점 자체가 이미 그 뜻). 헤테로원자의 H는
+//   반드시 표시하되 별도 결합선이 아니라 라벨에 접어서(OH, NH2) 표시한다.
+//   개수는 실제 H 원자를 세지 않고 implicitH(원자가 산수)로 구한다 — 이러면
+//   syncHydrogens를 아직 안 돌린 "탄소 골격만 그린" 2D 편집 중에도 항상 정확하다.
+// 규칙 2.3: 단일/이중/삼중 = 평행선 1/2/3개, 결합각은 layout()이 이미 120°/109.47°로 깔아둠.
+// 규칙 2.4: C·H 이외 전부 원소 기호 명시.
+// 규칙 2.5: 고리는 정확한 각형(layout이 보장) + 방향족은 Kekulé로 고정
+//   (원 표기는 방향족성 판정(휘켈)이 별도 필요해 범위 밖 — "일관성 유지" 규칙 충족은
+//   Kekulé 단독 사용으로 만족).
+const LABEL_PAD = 0.24; // 결합선을 라벨 근처에서 이만큼 당겨 잘라낸다(글자와 안 겹치게)
+const DBL_OFFSET = 0.09;
+const DBL_INSET = 0.14; // 두 번째/세 번째 선을 양끝에서 이만큼 짧게(평행선임을 분명히)
+
+function ringCentroid(ring, pos) {
+  return scale2(ring.reduce((s, a) => add2(s, pos.get(a)), [0, 0]), 1 / ring.length);
+}
+
+// i-j 결합이 어느 고리의 변이면 그 고리 중심 쪽 단위벡터(이중결합 안쪽 선 방향), 아니면 null.
+function ringInsideDir(rings, pos, i, j) {
+  for (const ring of rings) {
+    const n = ring.length;
+    const k = ring.indexOf(i);
+    if (k !== -1 && (ring[(k + 1) % n] === j || ring[(k - 1 + n) % n] === j)) {
+      const mid = scale2(add2(pos.get(i), pos.get(j)), 0.5);
+      return unit2(sub2(ringCentroid(ring, pos), mid));
+    }
+  }
+  return null;
+}
+
+// order에 따라 평행선 좌표쌍(월드 단위, 아직 스케일 전) 배열을 만든다.
+function bondSegments(p, q, order, insideDir) {
+  if (order <= 1) return [[p, q]];
+  const perp = insideDir ?? unit2([-(q[1] - p[1]), q[0] - p[0]]);
+  const d = sub2(q, p);
+  const inset = (t) => [add2(p, scale2(d, t)), sub2(q, scale2(d, t))];
+  if (order === 2) {
+    const [p2, q2] = inset(DBL_INSET);
+    return [[p, q], [add2(p2, scale2(perp, DBL_OFFSET)), add2(q2, scale2(perp, DBL_OFFSET))]];
+  }
+  const [p3, q3] = inset(DBL_INSET);
+  const off = scale2(perp, DBL_OFFSET);
+  return [[p, q], [add2(p3, off), add2(q3, off)], [sub2(p3, off), sub2(q3, off)]];
+}
+
+// p->q 선분을 라벨이 있는 쪽 끝에서 LABEL_PAD만큼 당긴다(양끝 다 라벨이면 둘 다).
+function clipToLabels(p, q, pHasLabel, qHasLabel) {
+  const d = sub2(q, p);
+  const len = norm2(d);
+  if (len < 1e-6) return [p, q];
+  const u = scale2(d, 1 / len);
+  const p2 = pHasLabel ? add2(p, scale2(u, LABEL_PAD)) : p;
+  const q2 = qHasLabel ? sub2(q, scale2(u, LABEL_PAD)) : q;
+  return [p2, q2];
+}
+
+// mol -> 골격식 SVG 문자열. scale: 결합 길이 1 단위 -> 픽셀. 테마 대응은 CSS 변수로.
+export function renderSVG(mol, { scale = 42 } = {}) {
+  const pos = layout(mol);
+  // 무거운 원자가 0~1개면 선으로 그릴 골격 자체가 없다(메탄 같은 단일 탄소 등) —
+  // 골격식은 이 경우 성립하지 않는 표기법이므로 분자식 텍스트로 대신한다.
+  if (pos.size <= 1) {
+    return `<svg viewBox="0 0 140 40"><text x="70" y="25" text-anchor="middle" font-size="16" `
+      + `fill="var(--fg)" font-family="sans-serif">${formula(mol)}</text></svg>`;
+  }
+
+  const heavyBonds = mol.bonds.filter((b) => mol.atoms[b.i].el !== 'H' && mol.atoms[b.j].el !== 'H');
+  const rings = findRings(mol);
+  const st = stability(mol);
+  const badAtoms = new Set(st.issues.map((x) => x.atom));
+
+  const pts = [...pos.values()];
+  const minX = Math.min(...pts.map((p) => p[0])) - 1;
+  const maxX = Math.max(...pts.map((p) => p[0])) + 1;
+  const minY = Math.min(...pts.map((p) => p[1])) - 1;
+  const maxY = Math.max(...pts.map((p) => p[1])) + 1;
+  const W = Math.max(1, (maxX - minX)) * scale, H = Math.max(1, (maxY - minY)) * scale;
+  const sx = (x) => (x - minX) * scale;
+  const sy = (y) => (maxY - y) * scale; // SVG y축은 아래로 증가하므로 뒤집는다
+
+  const hasLabel = (i) => mol.atoms[i].el !== 'C';
+  const labelText = (i) => {
+    const el = mol.atoms[i].el;
+    const h = Math.max(0, implicitH(mol, i));
+    return h === 0 ? el : `${el}H${h > 1 ? h : ''}`;
+  };
+
+  let bondsSvg = '';
+  for (const b of heavyBonds) {
+    const p = pos.get(b.i), q = pos.get(b.j);
+    const [cp, cq] = clipToLabels(p, q, hasLabel(b.i), hasLabel(b.j));
+    const inside = ringInsideDir(rings, pos, b.i, b.j);
+    for (const [a, c] of bondSegments(cp, cq, b.order, inside)) {
+      bondsSvg += `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
+        + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`;
+    }
+  }
+
+  let labelsSvg = '';
+  for (const i of pos.keys()) {
+    if (!hasLabel(i)) continue;
+    const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
+    const warn = badAtoms.has(i);
+    labelsSvg += `<rect x="${(x - 12).toFixed(1)}" y="${(y - 10).toFixed(1)}" width="24" height="20" `
+      + 'fill="var(--surface)"/>'
+      + `<text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle" font-size="15" `
+      + `fill="${warn ? '#dc2626' : 'var(--fg)'}" font-family="sans-serif">${labelText(i)}</text>`;
+  }
+  // 원자가 위반(옥텟 규칙 5 위반)은 탄소 꼭짓점에도 표시해야 하므로 라벨 없는 경우 별도 처리.
+  for (const i of badAtoms) {
+    if (hasLabel(i)) continue; // 위에서 이미 붉게 표시함
+    const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
+    labelsSvg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" `
+      + 'fill="none" stroke="#dc2626" stroke-width="1.6"/>';
+  }
+
+  return `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" width="100%" height="100%">`
+    + `${bondsSvg}${labelsSvg}</svg>`;
 }
