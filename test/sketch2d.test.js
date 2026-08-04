@@ -184,3 +184,48 @@ test('renderSVG: ghost.ok가 false면 빨간색으로 표시된다', () => {
   const svg = renderSVG(m, { ghost: { anchorIdx: 0, el: 'N', ok: false, reason: 'already-bonded' } });
   assert.ok(svg.includes('#dc2626'));
 });
+
+// ---- 5단계: 쐐기/파선 (규칙 2.6) --------------------------------------------------
+
+test('renderSVG 규칙 2.6: z가 거의 같은 결합은 평범한 <line> 그대로', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, 0.05]);
+  addBond(m, 0, 1);
+  const svg = renderSVG(m);
+  assert.equal((svg.match(/<line/g) || []).length, 1);
+  assert.ok(!svg.includes('<polygon'));
+});
+
+test('renderSVG 규칙 2.6: dz가 크게 양수인 결합은 쐐기(<polygon>)로 그려진다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, 1]);
+  addBond(m, 0, 1);
+  const svg = renderSVG(m);
+  assert.ok(svg.includes('<polygon'));
+  assert.equal((svg.match(/<line/g) || []).length, 0);
+});
+
+test('renderSVG 규칙 2.6: dz가 크게 음수인 결합은 파선(여러 <line>)으로 그려진다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, -1]);
+  addBond(m, 0, 1);
+  const svg = renderSVG(m);
+  assert.ok(!svg.includes('<polygon'));
+  assert.equal((svg.match(/<line/g) || []).length, 5);
+});
+
+test('renderSVG 규칙 2.6: 고리에 속한 결합은 dz가 커도 항상 평범한 선', () => {
+  const m = ring(6);
+  for (let i = 0; i < 6; i++) m.atoms[i].pos = [Math.cos(i), Math.sin(i), i % 2 === 0 ? 1 : -1];
+  const svg = renderSVG(m);
+  assert.ok(!svg.includes('<polygon'));
+  assert.equal((svg.match(/<line/g) || []).length, 6);
+});
+
+test('renderSVG 규칙 2.6: 이중/삼중결합은 dz가 커도 쐐기/파선 안 나온다(평행선 유지)', () => {
+  const dbl = createMolecule();
+  addAtom(dbl, 'C', [0, 0, 0]); addAtom(dbl, 'C', [1, 0, 1]); addBond(dbl, 0, 1, 2);
+  const svg = renderSVG(dbl);
+  assert.ok(!svg.includes('<polygon'));
+  assert.equal((svg.match(/<line/g) || []).length, 2);
+});

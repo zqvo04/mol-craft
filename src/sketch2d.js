@@ -233,6 +233,14 @@ const LABEL_PAD = 0.24; // 결합선을 라벨 근처에서 이만큼 당겨 잘
 const DBL_OFFSET = 0.09;
 const DBL_INSET = 0.14; // 두 번째/세 번째 선을 양끝에서 이만큼 짧게(평행선임을 분명히)
 
+// 규칙 2.6(쐐기/파선): z가 거의 같으면 임계값 미만으로 보고 평범한 선을 그린다.
+// 부호 규약은 이 앱 내부 정의다(3Dmol 카메라와 맞출 필요 없음 — 2D 골격식은 애초에
+// 3D 투영이 아니라 그래프 기반 개략도이므로 자체 규약이면 충분하다): dz > 0(대상 원자가
+// 앵커보다 화면 앞) -> 쐐기, dz < 0 -> 파선.
+const WEDGE_DZ_THRESHOLD = 0.15;
+const WEDGE_WIDTH = 0.16; // 쐐기/파선 넓은 쪽 폭(월드 단위, scale=42에서 약 6~7px)
+const DASH_COUNT = 5;
+
 function ringCentroid(ring, pos) {
   return scale2(ring.reduce((s, a) => add2(s, pos.get(a)), [0, 0]), 1 / ring.length);
 }
@@ -263,6 +271,27 @@ function bondSegments(p, q, order, insideDir) {
   const [p3, q3] = inset(DBL_INSET);
   const off = scale2(perp, DBL_OFFSET);
   return [[p, q], [add2(p3, off), add2(q3, off)], [sub2(p3, off), sub2(q3, off)]];
+}
+
+// 쐐기(앞으로 나온 결합): 앵커(p)가 뾰족한 점, 대상(q) 쪽이 넓어지는 채운 삼각형 3점.
+function wedgeTriangle(p, q) {
+  const perp = unit2([-(q[1] - p[1]), q[0] - p[0]]);
+  const half = WEDGE_WIDTH / 2;
+  return [p, add2(q, scale2(perp, half)), sub2(q, scale2(perp, half))];
+}
+
+// 파선(뒤로 들어간 결합): 앵커에서 대상 쪽으로 갈수록 길어지는 짧은 가로선 여러 개.
+function dashSegments(p, q) {
+  const perp = unit2([-(q[1] - p[1]), q[0] - p[0]]);
+  const d = sub2(q, p);
+  const segs = [];
+  for (let k = 1; k <= DASH_COUNT; k++) {
+    const t = k / DASH_COUNT;
+    const c = add2(p, scale2(d, t));
+    const half = (WEDGE_WIDTH / 2) * t;
+    segs.push([add2(c, scale2(perp, half)), sub2(c, scale2(perp, half))]);
+  }
+  return segs;
 }
 
 // p->q 선분을 라벨이 있는 쪽 끝에서 LABEL_PAD만큼 당긴다(양끝 다 라벨이면 둘 다).
@@ -333,6 +362,26 @@ export function renderSVG(mol, { scale = 42, ghost = null } = {}) {
     const p = pos.get(b.i), q = pos.get(b.j);
     const [cp, cq] = clipToLabels(p, q, hasLabel(b.i), hasLabel(b.j));
     const inside = ringInsideDir(rings, pos, b.i, b.j);
+
+    // 규칙 2.6: 고리 밖 단일결합만 대상 — z 변위(실제 3D 좌표)가 임계값 이상이면 쐐기/파선.
+    const dz = b.order === 1 && inside === null
+      ? mol.atoms[b.j].pos[2] - mol.atoms[b.i].pos[2]
+      : 0;
+    if (Math.abs(dz) >= WEDGE_DZ_THRESHOLD) {
+      if (dz > 0) {
+        const [t1, t2, t3] = wedgeTriangle(cp, cq);
+        bondsSvg += `<polygon points="${sx(t1[0]).toFixed(1)},${sy(t1[1]).toFixed(1)} `
+          + `${sx(t2[0]).toFixed(1)},${sy(t2[1]).toFixed(1)} `
+          + `${sx(t3[0]).toFixed(1)},${sy(t3[1]).toFixed(1)}" fill="var(--fg)"/>`;
+      } else {
+        for (const [a, c] of dashSegments(cp, cq)) {
+          bondsSvg += `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
+            + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`;
+        }
+      }
+      continue;
+    }
+
     for (const [a, c] of bondSegments(cp, cq, b.order, inside)) {
       bondsSvg += `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
         + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`;
