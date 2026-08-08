@@ -371,9 +371,7 @@ const REASON_MSG = {
 // 계산한다(레고처럼 정해진 각도에만 물림) — 붙이기 도구의 고스트 미리보기와 정확히 같은
 // 함수를 써서 "보여준 자리 = 실제로 붙는 자리"가 항상 일치하게 한다.
 // 결합이 성립하면 UFF 평형 길이로 스냅시킨다. 실패 시 방금 추가한 원자를 되돌린다.
-// pos2d: 2D 골격식 화면에서 붙일 때 sketch2d.layout()이 계산한 좌표를 [x, y, 0]으로
-// 그대로 써서 z=0 평면에 둔다(4단계). 3D 경로(pos2d 없음)는 기존 그대로다.
-function attachAtom(anchor, { pos2d, dir } = {}) {
+function attachAtom(anchor, { dir } = {}) {
   const el = state.element;
   const a = state.mol.atoms[anchor].pos;
   const placeDir = dir ?? idealDirection(state.mol, anchor);
@@ -391,7 +389,7 @@ function attachAtom(anchor, { pos2d, dir } = {}) {
 
   state.mol.atoms.pop(); // 시험 삽입 되돌리기 — 되돌린 깨끗한 상태를 undo 스냅샷으로 남긴다
   pushUndo();
-  const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(placeDir, check.targetLength));
+  const targetPos = add(a, scale(placeDir, check.targetLength));
   const idx2 = addAtom(state.mol, el, targetPos);
   addBond(state.mol, idx2, anchor, 1);
   if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
@@ -837,14 +835,17 @@ function renderFlat() {
   sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview, selection: state.selection });
 }
 
-// sketch2d.layout()의 nextChainDir로 새 원자의 2D 좌표를 구해 그대로 pos([x,y,0])로 쓴다
-// (attachAtom 주석 참고). 방향 계산 자체는 layout()/고스트 미리보기와 동일 함수를 쓴다.
+// 2D 화면에서 붙일 방향은 골격식 레이아웃이 정하고, 길이는 3D와 똑같이 attachAtom이
+// UFF 평형 길이로 정한다. 예전엔 layout()의 무단위 좌표(BOND_LEN=1)를 3D 절대좌표(Å)로
+// 그대로 넘겨서, 결합 길이가 34% 틀리고 앵커의 실제 3D 위치까지 무시됐다(사이클로헥산에
+// 원자 하나를 붙이면 2.5 Å 떨어진 곳에 생겨 신축 에너지가 333 kcal/mol이 됐고, 3D로
+// 돌아갈 때 최적화가 수렴하지 못했다). layout()은 3D 좌표를 읽지 않으므로 이렇게 바꿔도
+// 2D 그림은 달라지지 않는다.
 function attachAtom2D(anchor) {
   const pos = layout(state.mol);
   if (!pos.has(anchor)) return;
-  const dir = nextChainDir(state.mol, anchor, pos, 1);
-  const p = pos.get(anchor);
-  attachAtom(anchor, { pos2d: [p[0] + dir[0], p[1] + dir[1]] });
+  const d = nextChainDir(state.mol, anchor, pos, 1);
+  attachAtom(anchor, { dir: [d[0], d[1], 0] });
 }
 
 sketch2dEl.addEventListener('pointermove', (ev) => {
