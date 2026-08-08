@@ -114,6 +114,10 @@ function pickBond(px, py, thresholdPx = 16) {
   return best;
 }
 
+// 볼-스틱 모형의 구 반지름(Å). 가장 짧은 결합(O-H 0.96 Å)에서도 구 두 개가 막대를
+// 완전히 덮지 않도록 잡은 값이다 — 0.30 × 2 = 0.60 < 0.96.
+const ATOM_RADIUS = 0.30;
+
 // 응력 색상: 낮음(파랑) -> 중간(회백색) -> 높음(빨강).
 // ColorBrewer RdBu 3-스톱 발산 팔레트 — 색맹(적록색맹 포함) 사용자도
 // 밝기·색상 축 둘 다로 구분 가능해 히트맵 표준으로 권장된다.
@@ -153,9 +157,13 @@ function render() {
   // 셀렉트로 전환한다. 반지름은 이미 있는 공유결합 반지름을 그대로 쓴다(H가 눈에 띄게 작다).
   const colors = state.mol.atoms.map((a, i) =>
     (state.colorBy === 'strain' ? strainColor(e.perAtom[i], vmax) : CPK_COLOR[a.el] ?? '#909090'));
-  const radii = state.mol.atoms.map((a) => (COVALENT_RADIUS[a.el] ?? 0.7) * 0.55);
+  // 반지름은 원소와 무관한 고정값이다. 3Dmol의 sphere 스타일에는 원자별 반지름을 넘길
+  // 방법이 없고(radiusfunc 같은 속성은 존재하지 않는다 — 예전에 그걸 넘겼다가 조용히
+  // 무시당했고, radius가 없으면 반데르발스 반지름으로 떨어져 구가 결합 막대를 통째로
+  // 삼킨 공간채움 모형이 됐다), 원자별로 setStyle을 나눠 부르면 O(n²)로 되돌아간다.
+  // 원소 구분은 CPK 색이 맡고, 여기서는 결합이 보이는 볼-스틱 비율만 지킨다.
   viewer.setStyle({}, {
-    sphere: { colorfunc: (atom) => colors[atom.serial], radiusfunc: (atom) => radii[atom.serial] },
+    sphere: { radius: ATOM_RADIUS, colorfunc: (atom) => colors[atom.serial] },
     stick: { radius: 0.14, colorfunc: (atom) => colors[atom.serial] },
   });
 
@@ -164,9 +172,8 @@ function render() {
   // 의미를 갖는다: i-j-k-l).
   state.selection.forEach((i, order) => {
     const p = state.mol.atoms[i].pos;
-    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
     overlayLabels.push(viewer.addLabel(String(order + 1), {
-      position: { x: p[0], y: p[1] + r + 0.30, z: p[2] },
+      position: { x: p[0], y: p[1] + ATOM_RADIUS + 0.30, z: p[2] },
       backgroundColor: '#eab308', backgroundOpacity: 0.95,
       fontColor: '#1c1917', fontSize: 12, borderThickness: 0,
       alignment: 'center', inFront: true,
@@ -190,9 +197,8 @@ function render() {
   }
   for (const [i, level] of worst) {
     const p = state.mol.atoms[i].pos;
-    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
     overlayLabels.push(viewer.addLabel(level === 'danger' ? '✕' : '▲', {
-      position: { x: p[0], y: p[1] - r - 0.30, z: p[2] },
+      position: { x: p[0], y: p[1] - ATOM_RADIUS - 0.30, z: p[2] },
       backgroundColor: level === 'danger' ? '#dc2626' : '#f59e0b', backgroundOpacity: 0.95,
       fontColor: '#ffffff', fontSize: 12, borderThickness: 0,
       alignment: 'center', inFront: true,
