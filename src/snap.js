@@ -119,24 +119,15 @@ function sumFallback(dirs) {
   return unit(cross(dirs[0], ref));
 }
 
-// 앵커에 새 원자를 붙일 방향을 VSEPR 이상각에 정확히 맞춰("자석처럼") 계산한다.
-// 목표 각도는 앵커 원소의 전자 도메인 수(ELECTRON_DOMAINS = 결합자리 + 비공유쌍) 기준이다.
-// 결합 개수만 쓰면 2번째 치환기가 180°(선형)로 붙어버려 3·4번째가 정사면체로 수렴하지 못하고
-// 평면/팔면체 조각에 갇힌다. 전자 도메인을 목표로 잡아야 순차 조립이 매번 올바른 형상(물의
-// 굽은형, 암모니아의 삼각뿔형 등 비공유쌍이 있는 분자 포함)으로 수렴한다.
-// 배위수 0/1개: 기존 방향이 없거나 하나뿐이면 임의의 축으로 이상각만큼 회전(원뿔 위 한 점,
-//   원뿔 방위각은 임의 — 부착 후 회전 미세조정으로 조절).
-// 배위수 2개: 두 기존 방향이 이루는 평면에서 정확한 해석해(이등분선/법선 기저 분해)를 쓴다.
-//   기존 두 결합이 정확히 이상각이 아니어도(예: 조립 중간 단계) 강건하게 작동한다.
-// 배위수 3개 이상: 대칭 형상에서는 -sum이 정확한 4번째 방향과 일치한다(정사면체).
+// 점유된 방향 dirs가 주어졌을 때 ideal 각도를 만족하는 "다음" 방향 하나.
+// (기존 idealDirection의 본문 그대로 — 계산은 이 한 곳에만 둔다.)
+// 0개: 기존 방향이 없으면 sumFallback의 임의 축.
+// 1개: 임의의 수직축으로 이상각만큼 회전(원뿔 위 한 점, 방위각은 임의지만 결정적).
+// 2개: 두 방향이 이루는 평면에서 해석해(이등분선/법선 기저 분해). 기존 두 결합이 정확히
+//   이상각이 아니어도(조립 중간 단계) 강건하다.
+// 3개 이상: 대칭 형상에서 -sum이 정확한 다음 방향과 일치한다(정사면체).
 //   전자 도메인 5개 이상(초원자가)은 해석해가 없어 sumFallback으로 넘어간다.
-export function idealDirection(mol, anchor) {
-  const nb = neighbors(mol, anchor);
-  const a = mol.atoms[anchor].pos;
-  const dirs = nb.map((n) => unit(sub(mol.atoms[n].pos, a)));
-  const targetCoord = ELECTRON_DOMAINS[mol.atoms[anchor].el] ?? dirs.length + 1;
-  const ideal = IDEAL_ANGLES[targetCoord]?.[0];
-
+function nextIdealDir(dirs, ideal) {
   if (dirs.length === 1 && ideal !== undefined) {
     const ref = Math.abs(dirs[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
     const axis = cross(dirs[0], ref);
@@ -164,6 +155,29 @@ export function idealDirection(mol, anchor) {
   }
 
   return sumFallback(dirs);
+}
+
+// 앵커에 남아 있는 결합 자리를 **전부** 열거한다. 목표 각도는 앵커 원소의 전자 도메인 수
+// (ELECTRON_DOMAINS = 결합자리 + 비공유쌍) 기준이다 — 결합 개수만 쓰면 물의 두 번째 H가
+// 180°(선형)로 붙고, 그 대칭점은 UFF 힘이 정확히 0이라 최적화로도 못 빠져나온다.
+// 한 자리를 채운 상태를 다음 호출의 입력으로 넘기며 반복하므로, 결과는 기존 결합과
+// 새 슬롯들이 서로 이상각을 이루는 완전한 형상이 된다(정사면체 탄소의 남은 자리 3개 등).
+// 이미 도메인이 꽉 찬 원자(외부에서 불러온 과포화 구조)에도 최소 1개는 돌려준다 —
+// idealDirection이 절대 undefined를 뱉지 않게 하기 위한 안전장치다.
+export function openSlots(mol, anchor) {
+  const a = mol.atoms[anchor].pos;
+  const dirs = neighbors(mol, anchor).map((n) => unit(sub(mol.atoms[n].pos, a)));
+  const total = ELECTRON_DOMAINS[mol.atoms[anchor].el] ?? dirs.length + 1;
+  const ideal = IDEAL_ANGLES[total]?.[0];
+  const slots = [];
+  const want = Math.max(total, dirs.length + 1);
+  while (dirs.length + slots.length < want) slots.push(nextIdealDir([...dirs, ...slots], ideal));
+  return slots;
+}
+
+// 빈 자리 중 첫 번째. 기존 호출자(attachAtom·previewAttach·syncHydrogens)를 위한 유지 API.
+export function idealDirection(mol, anchor) {
+  return openSlots(mol, anchor)[0];
 }
 
 // 결합 원자가·VSEPR 편차로 구조 안정도를 0~100 점수와 이슈 목록으로 요약한다.

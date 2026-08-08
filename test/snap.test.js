@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
 import {
-  canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, stability,
+  canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
   implicitH, formula, syncHydrogens,
 } from '../src/snap.js';
-import { distance, angleDeg } from '../src/geom.js';
+import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
 import { minimize } from '../src/uff.js';
 
@@ -183,4 +183,44 @@ test('syncHydrogens: 두 번 불러도 결과가 같다(멱등)', () => {
   syncHydrogens(m);
   assert.equal(formula(m), f1);
   assert.equal(m.atoms.length, n1);
+});
+
+const angleBetween = (u, v) => Math.acos(Math.max(-1, Math.min(1, dot(u, v)))) * 180 / Math.PI;
+
+test('openSlots: 결합 1개짜리 탄소는 정사면체 빈 자리 3개를 준다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'H', [1.1, 0, 0]);
+  addBond(m, 0, 1);
+  const slots = openSlots(m, 0);
+  assert.equal(slots.length, 3);
+  for (const v of slots) {
+    assert.ok(Math.abs(angleBetween(v, [1, 0, 0]) - 109.47) < 1.5, `기존 결합과의 각: ${angleBetween(v, [1, 0, 0])}`);
+  }
+  for (let a = 0; a < 3; a++) {
+    for (let b = a + 1; b < 3; b++) {
+      assert.ok(Math.abs(angleBetween(slots[a], slots[b]) - 109.47) < 1.5,
+        `슬롯끼리의 각: ${angleBetween(slots[a], slots[b])}`);
+    }
+  }
+});
+
+test('openSlots: 결정적이다 (같은 분자면 같은 순서·같은 값)', () => {
+  const m = loadPreset('water');
+  assert.deepEqual(openSlots(m, 0), openSlots(m, 0));
+});
+
+test('openSlots: 물의 산소는 비공유쌍 자리 2개가 남는다', () => {
+  const m = loadPreset('water');
+  assert.equal(openSlots(m, 0).length, 2); // 전자 도메인 4 - 결합 2
+});
+
+test('idealDirection은 openSlots의 첫 원소와 같다 (기존 동작 보존)', () => {
+  const m = loadPreset('methane');
+  const m2 = createMolecule();
+  addAtom(m2, 'C', [0, 0, 0]);
+  addAtom(m2, 'H', [1.1, 0, 0]);
+  addBond(m2, 0, 1);
+  assert.deepEqual(idealDirection(m2, 0), openSlots(m2, 0)[0]);
+  assert.deepEqual(idealDirection(m, 1), openSlots(m, 1)[0]);
 });
