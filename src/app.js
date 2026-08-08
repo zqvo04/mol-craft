@@ -4,7 +4,7 @@ import {
   neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
 } from './model.js';
 import {
-  canBond, vseprCheck, newSnapEvents, idealDirection, stability, syncHydrogens,
+  canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, syncHydrogens,
 } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -23,7 +23,8 @@ const state = {
   snapState: {},
   showGrid: true,
   flat: false,
-  ghost: null, // { anchor, pos, ok, reason, el }
+  ghost: null, // { anchor, slots, slot, pos, ok, reason, el } — slots는 남은 빈 자리 전부
+  slot: 0,     // 활성 빈 자리 인덱스. R 키/휠로 순환한다(마인크래프트의 배치 방향 선택에 해당)
   pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
   undoStack: [],
 };
@@ -71,6 +72,11 @@ document.addEventListener('wheel', (ev) => {
   if (!document.getElementById('viewer').contains(ev.target)) return;
   ev.preventDefault();
   ev.stopPropagation();
+  // 붙이기로 원자를 조준 중이면 휠은 확대가 아니라 "붙일 자리 바꾸기"다(마인크래프트 핫바 감각).
+  if (state.tool === 'place' && state.ghost && state.ghost.slots.length > 1) {
+    cycleSlot(ev.deltaY < 0 ? -1 : 1);
+    return;
+  }
   viewer.zoom(ev.deltaY < 0 ? 1.15 : 1 / 1.15);
   viewer.render();
 }, { capture: true, passive: false });
@@ -333,12 +339,12 @@ const REASON_MSG = {
 // 결합이 성립하면 UFF 평형 길이로 스냅시킨다. 실패 시 방금 추가한 원자를 되돌린다.
 // pos2d: 2D 골격식 화면에서 붙일 때 sketch2d.layout()이 계산한 좌표를 [x, y, 0]으로
 // 그대로 써서 z=0 평면에 둔다(4단계). 3D 경로(pos2d 없음)는 기존 그대로다.
-function attachAtom(anchor, { pos2d } = {}) {
+function attachAtom(anchor, { pos2d, dir } = {}) {
   const el = state.element;
   const a = state.mol.atoms[anchor].pos;
-  const dir = idealDirection(state.mol, anchor);
+  const placeDir = dir ?? idealDirection(state.mol, anchor);
 
-  const idx = addAtom(state.mol, el, add(a, scale(dir, 2.5)));
+  const idx = addAtom(state.mol, el, add(a, scale(placeDir, 2.5)));
   // canBond(mol, i, j)의 reason 태그는 i=중심/j=신규로 고정된 관례다(snap.test.js 참고).
   // 인자를 (idx, anchor) 순으로 넣으면 태그가 뒤집혀 REASON_MSG가 반대로 안내한다.
   const check = canBond(state.mol, anchor, idx);
@@ -351,7 +357,7 @@ function attachAtom(anchor, { pos2d } = {}) {
 
   state.mol.atoms.pop(); // 시험 삽입 되돌리기 — 되돌린 깨끗한 상태를 undo 스냅샷으로 남긴다
   pushUndo();
-  const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(dir, check.targetLength));
+  const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(placeDir, check.targetLength));
   const idx2 = addAtom(state.mol, el, targetPos);
   addBond(state.mol, idx2, anchor, 1);
   if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
@@ -534,11 +540,13 @@ $('tool-select').onclick = () => setTool('select');
 $('tool-erase').onclick = () => setTool('erase');
 $('tool-bond').onclick = () => setTool('bond');
 
-$('palette').innerHTML = ELEMENTS.map((el) => `<button data-el="${el}">${el}</button>`).join('');
+$('palette').innerHTML = ELEMENTS.map((el, k) =>
+  `<button data-el="${el}" title="${k < 9 ? `단축키 ${k + 1}` : ''}">${el}</button>`).join('');
 $('palette').onclick = (ev) => {
   const btn = ev.target.closest('button[data-el]');
   if (!btn) return;
   state.element = btn.dataset.el;
+  state.slot = 0;
   setTool('place');
 };
 
@@ -550,7 +558,9 @@ let ghostShapes = [];
 let blinkOn = true;
 setInterval(() => { blinkOn = !blinkOn; if (state.ghost) drawGhost(); }, 400);
 
-// 초록: 정상. 주황: 붙긴 하지만 원자가 초과(초원자가/불안정) 경고. 빨강: 아예 못 붙임.
+// 초록: 정상. 주황: 붙지만 초원자가 경고. 빨강: 못 붙음(원자가 포화 등).
+// 마인크래프트가 조준한 블록에 검은 외곽선을 그리듯, 조준 중인 원자에 하늘색 와이어프레임
+// 구를 씌우고 남은 빈 자리를 전부 흐리게 띄운다 — 활성 자리 하나만 깜빡인다.
 function drawGhost() {
   for (const s of ghostShapes) viewer.removeShape(s);
   const g = state.ghost;
@@ -558,10 +568,37 @@ function drawGhost() {
   const color = !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
   const opacity = blinkOn ? 0.6 : 0.22;
   ghostShapes = [
+    viewer.addSphere({
+      center: { x: a[0], y: a[1], z: a[2] }, radius: 0.44,
+      color: '#38bdf8', opacity: 0.9, wireframe: true,
+    }),
+  ];
+  // 활성이 아닌 빈 자리들 — 여기로도 붙일 수 있다는 것을 보여준다(R 키/휠로 전환).
+  if (g.ok && g.slots.length > 1) {
+    const len = Math.hypot(g.pos[0] - a[0], g.pos[1] - a[1], g.pos[2] - a[2]);
+    g.slots.forEach((d, k) => {
+      if (k === g.slot) return;
+      const p = add(a, scale(d, len));
+      ghostShapes.push(viewer.addSphere({
+        center: { x: p[0], y: p[1], z: p[2] }, radius: 0.18, color, opacity: 0.16,
+      }));
+    });
+  }
+  ghostShapes.push(
     viewer.addSphere({ center: { x: g.pos[0], y: g.pos[1], z: g.pos[2] }, radius: 0.32, color, opacity }),
     viewer.addLine({ start: { x: a[0], y: a[1], z: a[2] }, end: { x: g.pos[0], y: g.pos[1], z: g.pos[2] }, color, dashed: true }),
-  ];
+  );
   viewer.render();
+}
+
+// 활성 빈 자리를 step만큼 돌린다. state.ghost를 다시 계산해야 pos/색이 함께 갱신된다.
+function cycleSlot(step) {
+  if (!state.ghost) return;
+  state.slot = state.ghost.slot + step;
+  state.ghost = previewAttach(state.ghost.anchor, state.element);
+  state.slot = state.ghost.slot;
+  blinkOn = true;
+  drawGhost();
 }
 
 function clearGhost() {
@@ -574,20 +611,25 @@ function clearGhost() {
 
 // canBond는 실존 원자 쌍만 받으므로, attachAtom과 같은 시험 삽입/되돌리기 패턴으로
 // "지금 이 앵커에 이 원소를 붙이면 어떻게 되는지"를 부작용 없이 미리 계산한다.
+// openSlots가 남은 자리를 전부 주므로 state.slot으로 그중 하나를 활성으로 고른다 —
+// 미리 보여준 자리가 곧 실제로 붙는 자리라는 보장은 그대로 유지된다(같은 배열을 쓴다).
 function previewAttach(anchor, el) {
   const a = state.mol.atoms[anchor].pos;
-  const dir = idealDirection(state.mol, anchor);
-  const idx = addAtom(state.mol, el, add(a, scale(dir, 2.5)));
+  const slots = openSlots(state.mol, anchor);
+  const slot = ((state.slot % slots.length) + slots.length) % slots.length;
+  const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
   const len = check.ok ? check.targetLength : 1.6;
-  return { anchor, pos: add(a, scale(dir, len)), ok: check.ok, reason: check.reason, el };
+  return { anchor, slots, slot, pos: add(a, scale(slots[slot], len)), ok: check.ok, reason: check.reason, el };
 }
 
 viewerEl.addEventListener('pointermove', (ev) => {
   if (state.tool !== 'place') return;
   const anchor = pickAtom(ev.pageX, ev.pageY, 40);
   if (anchor === -1) { clearGhost(); return; }
+  // 다른 원자를 조준하면 슬롯 선택을 처음으로 되돌린다 — 앵커마다 자리 개수가 다르다.
+  if (state.ghost?.anchor !== anchor) state.slot = 0;
   state.ghost = previewAttach(anchor, state.element);
   blinkOn = true;
   drawGhost();
@@ -675,13 +717,22 @@ function handleBondClick(hit) {
 viewerEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
     if (!state.ghost) return;
-    if (state.ghost.ok) attachAtom(state.ghost.anchor);
+    if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
     else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
   if (hit === -1) return;
   handleAtomClick(hit, ev.shiftKey);
+});
+
+// 마인크래프트 규약: 좌클릭 배치, 우클릭 제거. 도구를 바꾸지 않고도 즉시 지울 수 있다.
+// 3D와 2D가 히트테스트 방식만 다르고 동작은 같으므로 deleteAtom 하나를 공유한다.
+viewerEl.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  if (state.flat) return; // 2D가 위에 덮여 있으면 아래 핸들러가 처리한다
+  const hit = pickAtom(ev.pageX, ev.pageY, 24);
+  if (hit !== -1) deleteAtom(hit);
 });
 
 // ---- 2D 골격식 화면에서의 레고 조립(4단계) ---------------------------------
@@ -767,10 +818,23 @@ sketch2dEl.addEventListener('click', (ev) => {
   handleAtomClick(idx, ev.shiftKey);
 });
 
+sketch2dEl.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  const hit = ev.target.closest('[data-atom]');
+  if (hit) deleteAtom(Number(hit.dataset.atom));
+});
+
 // ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
 document.addEventListener('keydown', (ev) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
+  if (ev.key === 'r' || ev.key === 'R') { cycleSlot(1); return; }
+  // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
+  if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey) {
+    const el = ELEMENTS[Number(ev.key) - 1];
+    if (el) { state.element = el; state.slot = 0; setTool('place'); toast(`${el} 선택`); }
+    return;
+  }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'a') { ev.preventDefault(); state.selection = state.mol.atoms.map((_, i) => i); render(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); undo(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'd') { ev.preventDefault(); duplicateSelection(); return; }
