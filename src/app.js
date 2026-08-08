@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain,
+  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -387,13 +387,18 @@ function attachAtom(anchor, { pos2d, dir } = {}) {
 }
 
 // 원자 하나를 뗀다(지우개 도구). 원자가 하나뿐이면 남길 것이 없으니 막는다.
+// 원자 하나를 뗀다(지우개 도구·우클릭). 떨어져 나가는 작은 조각은 함께 지운다
+// (model.pruneAtom) — 사슬 중간을 자를 때마다 남은 파편을 하나씩 다시 지우던 불편을 없앤다.
+// 선택 삭제(Del)는 지금처럼 "고른 것만 정확히" 지운다 — 두 동작을 도구로 구분한다.
 function deleteAtom(i) {
   if (state.mol.atoms.length <= 1) { toast('마지막 원자는 삭제할 수 없습니다', 'err'); return; }
   pushUndo();
-  removeAtom(state.mol, i);
-  state.selection = state.selection.filter((s) => s !== i).map((s) => (s > i ? s - 1 : s));
+  const removed = pruneAtom(state.mol, i);
+  if (removed.length === 0) { state.undoStack.pop(); return; }
+  state.selection = [];
   state.snapState = {};
   playClick(220);
+  if (removed.length > 1) toast(`${removed.length}개 원자 제거(가지치기)`);
   checkSnaps();
   render();
 }

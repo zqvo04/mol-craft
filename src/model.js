@@ -31,6 +31,53 @@ export function removeAtom(mol, idx) {
     }));
 }
 
+// 연결 성분 목록. 각 성분은 원자 인덱스 배열이다.
+function components(mol) {
+  const seen = new Set();
+  const out = [];
+  for (let s = 0; s < mol.atoms.length; s++) {
+    if (seen.has(s)) continue;
+    const comp = [];
+    const stack = [s];
+    seen.add(s);
+    while (stack.length) {
+      const cur = stack.pop();
+      comp.push(cur);
+      for (const n of neighbors(mol, cur)) {
+        if (!seen.has(n)) { seen.add(n); stack.push(n); }
+      }
+    }
+    out.push(comp.sort((a, b) => a - b));
+  }
+  return out;
+}
+
+// 가지치기 삭제: 원자를 지운 뒤 가장 큰 연결 성분만 남긴다. 사슬 중간을 자르면 본체가
+// 남고 떨어져 나간 조각이 함께 사라진다 — 예전엔 원자 하나만 지워서 뒤쪽 가지가 허공에
+// 떠버렸고, 사용자가 남은 조각을 하나씩 다시 지워야 했다.
+// 크기가 같으면 더 작은 인덱스를 포함한 쪽을 남긴다(결정적).
+// 반환값은 실제로 지운 원본 인덱스들(내림차순). 분자가 통째로 사라질 상황이면 아무것도 안 한다.
+export function pruneAtom(mol, i) {
+  if (mol.atoms.length <= 1) return [];
+  const probe = { atoms: mol.atoms.map((a) => ({ ...a, pos: [...a.pos] })), bonds: mol.bonds.map((b) => ({ ...b })) };
+  removeAtom(probe, i);
+  if (probe.atoms.length === 0) return [];
+
+  const comps = components(probe);
+  const keep = comps.reduce((best, c) =>
+    (c.length > best.length || (c.length === best.length && c[0] < best[0]) ? c : best));
+  const keepSet = new Set(keep);
+  // probe 인덱스를 원본 인덱스로 되돌린다 — removeAtom이 i보다 큰 인덱스를 1씩 당겼다.
+  const toOriginal = (p) => (p >= i ? p + 1 : p);
+  const doomed = [i];
+  for (let p = 0; p < probe.atoms.length; p++) {
+    if (!keepSet.has(p)) doomed.push(toOriginal(p));
+  }
+  const sorted = [...new Set(doomed)].sort((a, b) => b - a);
+  for (const idx of sorted) removeAtom(mol, idx);
+  return sorted;
+}
+
 // 선택 원자를 2 Å 옆에 복제한다. 두 끝 다 선택에 포함된 결합만 같이 복제한다
 // (선택 밖 원자와의 결합은 복제본에서 끊긴 채로 둔다 — 부분 선택 복제 시 자연스러운 동작).
 export function duplicateAtoms(mol, indices) {
