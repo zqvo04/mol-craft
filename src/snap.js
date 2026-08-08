@@ -232,6 +232,14 @@ export function stability(mol) {
     } else if (normal !== undefined && used > normal) {
       issues.push({ atom: i, level: 'warn', msg: `${el}${i} 초원자가` });
     }
+
+    // 원자가 미충족(라디칼). 이중결합을 만들지 못해 결합 1개로 남은 산소처럼, 화학적으로
+    // 존재할 수 없는 상태인데 지금까지 아무 표시가 없었다 — 정작 틀린 원자가 조용하고
+    // 멀쩡한 -OH가 빨갰다. 조립 중에는 부족한 게 정상이므로 danger가 아니라 warn이다.
+    const deficit = implicitH(mol, i);
+    if (deficit > 0) {
+      issues.push({ atom: i, level: 'warn', msg: `${el}${i} 원자가 부족(${deficit})` });
+    }
     if (nb.length >= 2) {
       const v = vseprCheck(mol, i);
       if (!v.satisfied) {

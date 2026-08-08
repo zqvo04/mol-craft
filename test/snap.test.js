@@ -284,3 +284,22 @@ test('geometryName: 전자 도메인과 결합 수로 형상을 부른다', () =
   const s = loadPreset('sf6');
   assert.equal(geometryName(s, 0), '정팔면체');     // 결합 6
 });
+
+test('stability: 원자가가 모자란 원자를 경고한다 (라디칼 회귀)', () => {
+  // CH3-C(-O)(-OH)H 처럼, 이중결합을 못 만들어 결합 1개로 남은 산소.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'O', [1.4, 0, 0]);
+  addBond(m, 0, 1, 1);
+  const issues = stability(m).issues;
+  assert.ok(issues.some((x) => x.atom === 1 && x.msg.includes('원자가 부족')),
+    '결합 1개짜리 산소는 원자가가 1 모자라므로 경고해야 한다');
+  assert.equal(issues.find((x) => x.atom === 1 && x.msg.includes('원자가 부족')).level, 'warn');
+});
+
+test('stability: 원자가가 꽉 찬 분자에는 부족 경고가 없다', () => {
+  const m = loadPreset('methane');
+  minimize(m);
+  assert.deepEqual(stability(m).issues.filter((x) => x.msg.includes('원자가 부족')), []);
+  assert.equal(stability(m).score, 100);
+});
