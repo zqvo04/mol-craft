@@ -165,6 +165,7 @@
   #sketch2d[hidden] { display: none; }
   #sketch2d svg { max-width: 92%; max-height: 92%; }
   body[data-flat="true"] #legend, body[data-flat="true"] #stability { display: none; }
+  body:not([data-colorby="strain"]) #legend { display: none; }
   #stability {
     position: absolute; top: 16px; left: 16px;
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 60%;
@@ -197,6 +198,10 @@
   <strong>mol-craft</strong>
   <select id="mode"><option value="learn">학습 모드</option><option value="research">연구 모드</option></select>
   <select id="preset"></select>
+  <select id="colorby" title="원자 색을 무엇으로 칠할지">
+    <option value="element">원소 색</option>
+    <option value="strain">응력 히트맵</option>
+  </select>
   <button id="minimize">구조 최적화</button>
   <button id="scan">이면각 스캔</button>
   <select id="scan-step" title="스캔 각도 간격"><option value="5">5°</option><option value="10" selected>10°</option>

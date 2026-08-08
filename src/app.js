@@ -7,7 +7,7 @@ import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
   geometryName, bondDistanceOk, cycleBondOrder,
 } from './snap.js';
-import { MAX_VALENCE } from './params.js';
+import { MAX_VALENCE, CPK_COLOR, COVALENT_RADIUS } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
@@ -18,6 +18,7 @@ const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I']
 const state = {
   mol: loadPreset('methane'),
   mode: 'learn',
+  colorBy: 'element', // 'element' | 'strain' — 조립 중에는 원소 구분이 우선이라 원소 색이 기본이다
   tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
   element: 'C',
   selection: [],
@@ -148,9 +149,14 @@ function render() {
   // 원자마다 setStyle을 부르면 3Dmol이 호출마다 전체 원자를 훑어서 O(n²)가 된다 —
   // 원자 수십 개만 돼도 클릭·드래그가 눈에 띄게 끊겼다. 색만 원자별로 다르므로
   // colorfunc 하나로 넘겨 setStyle은 딱 한 번만 부른다(serial = XYZ 모델의 0-based 인덱스).
-  const colors = state.mol.atoms.map((_, i) => strainColor(e.perAtom[i], vmax));
+  // 예전엔 색이 응력 히트맵뿐이고 반지름도 전부 0.30이라 H·C·O가 화면에서 완전히 똑같이
+  // 보였다. 조립 중에는 원소 구분이 우선이므로 CPK 색이 기본이고, 응력 히트맵은 헤더
+  // 셀렉트로 전환한다. 반지름은 이미 있는 공유결합 반지름을 그대로 쓴다(H가 눈에 띄게 작다).
+  const colors = state.mol.atoms.map((a, i) =>
+    (state.colorBy === 'strain' ? strainColor(e.perAtom[i], vmax) : CPK_COLOR[a.el] ?? '#909090'));
+  const radii = state.mol.atoms.map((a) => (COVALENT_RADIUS[a.el] ?? 0.7) * 0.55);
   viewer.setStyle({}, {
-    sphere: { radius: 0.30, colorfunc: (atom) => colors[atom.serial] },
+    sphere: { colorfunc: (atom) => colors[atom.serial], radiusfunc: (atom) => radii[atom.serial] },
     stick: { radius: 0.14, colorfunc: (atom) => colors[atom.serial] },
   });
 
@@ -929,6 +935,13 @@ $('mode').onchange = (ev) => {
   document.body.dataset.mode = state.mode;
   render();
 };
+
+$('colorby').onchange = (ev) => {
+  state.colorBy = ev.target.value;
+  document.body.dataset.colorby = state.colorBy;
+  render();
+};
+document.body.dataset.colorby = state.colorBy;
 
 document.body.dataset.mode = state.mode;
 setTool('select');
