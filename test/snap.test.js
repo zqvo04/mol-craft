@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens,
+  implicitH, formula, syncHydrogens, hudSummary,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -223,4 +223,28 @@ test('idealDirection은 openSlots의 첫 원소와 같다 (기존 동작 보존)
   addBond(m2, 0, 1);
   assert.deepEqual(idealDirection(m2, 0), openSlots(m2, 0)[0]);
   assert.deepEqual(idealDirection(m, 1), openSlots(m, 1)[0]);
+});
+
+test('hudSummary: danger를 먼저, 최대 개수만 보여주고 나머지는 센다', () => {
+  const st = {
+    score: 40,
+    issues: [
+      { atom: 1, level: 'warn', msg: 'a' },
+      { atom: 2, level: 'warn', msg: 'b' },
+      { atom: 3, level: 'danger', msg: 'c' },
+      { atom: 4, level: 'warn', msg: 'd' },
+      { atom: 5, level: 'danger', msg: 'e' },
+    ],
+  };
+  const s = hudSummary(st, 3);
+  assert.equal(s.score, 40);
+  assert.equal(s.shown.length, 3);
+  assert.deepEqual(s.shown.map((x) => x.msg), ['c', 'e', 'a']);
+  assert.equal(s.more, 2);
+});
+
+test('hudSummary: 이슈가 적으면 more는 0이다', () => {
+  const s = hudSummary({ score: 100, issues: [] }, 3);
+  assert.equal(s.shown.length, 0);
+  assert.equal(s.more, 0);
 });

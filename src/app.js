@@ -4,7 +4,7 @@ import {
   neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
 } from './model.js';
 import {
-  canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, syncHydrogens,
+  canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
 } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -143,6 +143,7 @@ export function strainColor(v, vmax) {
 
 let firstRender = true;
 let selectionShapes = []; // render()가 만드는 노란 강조 구 — 이 배열만 지웠다 다시 그린다.
+let warnShapes = [];      // 문제 원자 위의 경고 표식 — 같은 생명주기로 관리한다.
 let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
 
 function render() {
@@ -154,6 +155,8 @@ function render() {
   // 되어 조작감이 뚝뚝 끊겼다. 이 함수가 만든 선택 강조 구만 추적해서 그것만 지운다.
   for (const s of selectionShapes) viewer.removeShape(s);
   selectionShapes = [];
+  for (const s of warnShapes) viewer.removeShape(s);
+  warnShapes = [];
   viewer.addModel(toXYZ(state.mol), 'xyz');
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
@@ -176,6 +179,24 @@ function render() {
     const p = state.mol.atoms[state.pendingBond].pos;
     selectionShapes.push(viewer.addSphere({
       center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
+    }));
+  }
+  // 경고를 문제 원자 위에 직접 그린다. 지금까지는 좌상단 텍스트 칩뿐이라, 원자 색이 전부
+  // 응력 색(파랑~빨강)인 3D 화면에서 어느 원자가 문제인지 알 방법이 없었다.
+  // 빨강 와이어프레임 = 심각(원자가 초과 등), 주황 = 경고(VSEPR 편차·초원자가).
+  const st = stability(state.mol);
+  state.lastStability = st;
+  const worst = new Map();
+  for (const x of st.issues) {
+    if (worst.get(x.atom) !== 'danger') worst.set(x.atom, x.level);
+  }
+  for (const [i, level] of worst) {
+    const p = state.mol.atoms[i].pos;
+    warnShapes.push(viewer.addSphere({
+      center: { x: p[0], y: p[1], z: p[2] },
+      radius: level === 'danger' ? 0.52 : 0.46,
+      color: level === 'danger' ? '#dc2626' : '#f59e0b',
+      opacity: 0.85, wireframe: true,
     }));
   }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
@@ -232,11 +253,13 @@ function updatePanels(e) {
     });
   $('vsepr').innerHTML = rows.length ? `<table>${rows.join('')}</table>` : '—';
 
-  // 안정도 HUD: 옥텟/원자가·VSEPR 편차를 점수+칩으로 요약(게이밍 스타일 즉시 피드백).
-  const st = stability(state.mol);
-  const scoreColor = st.score >= 80 ? 'var(--success)' : st.score >= 50 ? 'var(--accent)' : '#dc2626';
-  $('stability').innerHTML = `<span style="color:${scoreColor};font-weight:700">${st.score}</span>` +
-    st.issues.map((x) => `<span class="chip ${x.level}">${x.level === 'danger' ? '✕' : '▲'} ${x.msg}</span>`).join('');
+  // 안정도 HUD: 점수 + 심각한 것 몇 개만. 나머지는 개수로 접고, 어느 원자인지는
+  // 3D 표식(render의 warnShapes)이 직접 가리킨다.
+  const s2 = hudSummary(state.lastStability ?? stability(state.mol));
+  const scoreColor = s2.score >= 80 ? 'var(--success)' : s2.score >= 50 ? 'var(--accent)' : '#dc2626';
+  $('stability').innerHTML = `<span style="color:${scoreColor};font-weight:700">${s2.score}</span>`
+    + s2.shown.map((x) => `<span class="chip ${x.level}">${x.level === 'danger' ? '✕' : '▲'} ${x.msg}</span>`).join('')
+    + (s2.more ? `<span class="chip">+${s2.more}개</span>` : '');
 
   updateDihedralPanel();
 }

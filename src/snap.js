@@ -219,6 +219,15 @@ export function stability(mol) {
   return { score, issues };
 }
 
+// HUD에 실제로 그릴 것만 골라낸다. 문제 원자가 20개면 칩 20개가 화면 절반을 덮어
+// 아무것도 못 읽는다 — 심각한 것 몇 개만 보여주고 나머지는 개수로 접는다.
+// 위치 정보는 3D 표식(app.render)이 담당하므로 HUD는 "얼마나 나쁜지"만 알리면 된다.
+export function hudSummary(st, max = 3) {
+  const rank = (x) => (x.level === 'danger' ? 0 : 1);
+  const sorted = [...st.issues].sort((a, b) => rank(a) - rank(b));
+  return { score: st.score, shown: sorted.slice(0, max), more: Math.max(0, sorted.length - max) };
+}
+
 // 골격식 규칙 2.2: "결합 수에 따라 자동 계산"한 H 개수. bondOrderSum은 이미 존재하는
 // H 결합까지 포함해 실제 사용 원자가를 그대로 반영하므로, 원소별 채워야 할 나머지가
 // 바로 나온다(음수면 원자가 초과 — syncHydrogens가 그만큼 뗀다).
