@@ -1,4 +1,4 @@
-import { neighbors, bondOrderSum, bondBetween, setDihedral } from './model.js';
+import { neighbors, bondOrderSum, bondBetween, setDihedral, isTorsionChain } from './model.js';
 import { UFF_PARAMS } from './params.js';
 import { distance, angleDeg, dihedralDeg } from './geom.js';
 
@@ -314,6 +314,9 @@ export function minimize(mol, opts = {}) {
 
 // 이면각 스캔. relax=false면 강체 회전(빠름), true면 스캔 좌표를 고정한 제약 최소화(느림).
 export function scanDihedral(mol, idx, { stepDeg = 10, relax = false } = {}) {
+  if (!isTorsionChain(mol, idx)) {
+    throw new Error('선택한 원자 4개가 이어진 이면각이 아닙니다 (i-j-k-l이 전부 결합돼 있어야 합니다)');
+  }
   const snapshot = mol.atoms.map((a) => [...a.pos]);
   const out = [];
   for (let angle = -180; angle <= 180; angle += stepDeg) {

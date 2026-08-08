@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
 import {
-  typeAtom, hybridization, bondLength, buildTerms, energy, gradient, minimize, topologyKey, cachedTerms,
+  typeAtom, hybridization, bondLength, buildTerms, energy, gradient, minimize, topologyKey, cachedTerms, scanDihedral,
 } from '../src/uff.js';
 import { UFF_PARAMS } from '../src/params.js';
 import { loadPreset } from '../src/presets.js';
@@ -234,4 +234,10 @@ test('cachedTerms는 같은 위상이면 같은 배열을 재사용하고, 바�
   addAtom(m, 'H', [9, 9, 9]);
   addBond(m, 0, m.atoms.length - 1);   // 위상 변화
   assert.notEqual(cachedTerms(m), t1, '위상이 바뀌면 새로 만들어야 한다');
+});
+
+test('scanDihedral: 이면각이 아닌 4개는 조용히 0을 내지 않고 거부한다', () => {
+  const m = loadPreset('methane');
+  assert.throws(() => scanDihedral(m, [1, 0, 2, 3], { stepDeg: 60 }),
+    /이면각/, '전부 0인 평평한 선을 돌려주면 안 된다');
 });

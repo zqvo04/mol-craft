@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
+  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -247,6 +247,11 @@ function updateDihedralPanel() {
     $('dihedral-info').textContent = '원자 4개를 순서대로 선택하면 활성화됩니다';
     return;
   }
+  if (!isTorsionChain(state.mol, s)) {
+    slider.disabled = true;
+    $('dihedral-info').textContent = '이어진 원자 4개(i-j-k-l)를 순서대로 선택하세요';
+    return;
+  }
   if (branchAtoms(state.mol, s[1], s[2]) === null) {
     slider.disabled = true;
     $('dihedral-info').textContent = '고리 결합 — 직접 회전 불가';
@@ -427,6 +432,10 @@ function checkSnaps() {
 
 $('scan').onclick = () => {
   if (state.selection.length !== 4) { toast('원자 4개를 순서대로 선택하세요', 'err'); return; }
+  if (!isTorsionChain(state.mol, state.selection)) {
+    toast('이어진 원자 4개(i-j-k-l)를 선택하세요', 'err');
+    return;
+  }
   try {
     drawScan(scanDihedral(state.mol, state.selection, {
       stepDeg: Number($('scan-step').value),

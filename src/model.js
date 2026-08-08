@@ -76,6 +76,15 @@ export function measure(mol, idx) {
   throw new Error(`measure: 지원하지 않는 원자 수 ${idx.length}`);
 }
 
+// i-j-k-l이 진짜 이면각인지. 세 결합이 전부 실재해야 한다.
+// branchAtoms만으로는 부족하다: 메탄에서 H-C-H-H를 고르면 branchAtoms는 null이 아니어서
+// 슬라이더가 활성화되는데, 정작 회전축 반대편에 원자가 없어 조작해도 아무것도 안 움직이고
+// 스캔은 전부 0인 평평한 선이 나왔다(오류 메시지도 없이).
+export function isTorsionChain(mol, [i, j, k, l]) {
+  if (new Set([i, j, k, l]).size !== 4) return false;
+  return !!(bondBetween(mol, i, j) && bondBetween(mol, j, k) && bondBetween(mol, k, l));
+}
+
 // i-j-k-l 이면각을 targetDeg로 맞춘다. j-k 결합의 k쪽 가지를 회전.
 export function setDihedral(mol, [i, j, k, l], targetDeg) {
   const moving = branchAtoms(mol, j, k);
