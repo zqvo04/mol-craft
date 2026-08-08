@@ -206,6 +206,25 @@ export function buildTerms(mol) {
   return terms;
 }
 
+// 항(term)은 좌표가 아니라 위상(원소 + 결합 목록)에만 의존한다 — bondLength·힘상수는
+// 원자 타입에서 나오고, vdW 제외쌍도 결합 그래프에서 나온다. eval은 매번 넘겨받은 mol의
+// 현재 좌표를 읽으므로, 위상이 그대로면 좌표가 아무리 움직여도 같은 항을 계속 쓸 수 있다.
+export function topologyKey(mol) {
+  return mol.atoms.map((a) => a.el + (a.type ?? '')).join(',')
+    + '|' + mol.bonds.map((b) => `${b.i}-${b.j}:${b.order}`).join(',');
+}
+
+// render()가 클릭·슬라이더·마우스 이동마다 buildTerms를 새로 돌리던 것을 없앤다
+// (vdW 항만 O(n²)개, 항마다 클로저 할당). 캐시 슬롯은 하나로 충분하다 — 앱은 한 번에
+// 분자 하나만 다룬다.
+// ponytail: 슬롯 1개 캐시. 여러 분자를 동시에 다루게 되면 Map으로 바꾼다.
+let termCache = { key: null, terms: null };
+export function cachedTerms(mol) {
+  const key = topologyKey(mol);
+  if (termCache.key !== key) termCache = { key, terms: buildTerms(mol) };
+  return termCache.terms;
+}
+
 export function energy(mol, terms = buildTerms(mol)) {
   const byType = { bond: 0, angle: 0, torsion: 0, vdw: 0 };
   const perAtom = new Array(mol.atoms.length).fill(0);

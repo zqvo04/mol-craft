@@ -1,5 +1,5 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
-import { energy, minimize, scanDihedral, typeAtom } from './uff.js';
+import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
 import {
   neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
 } from './model.js';
@@ -21,7 +21,6 @@ const state = {
   element: 'C',
   selection: [],
   snapState: {},
-  showGrid: true,
   flat: false,
   ghost: null, // { anchor, slots, slot, pos, ok, reason, el } — slots는 남은 빈 자리 전부
   slot: 0,     // 활성 빈 자리 인덱스. R 키/휠로 순환한다(마인크래프트의 배치 방향 선택에 해당)
@@ -31,9 +30,15 @@ const state = {
 
 const LS_KEY = 'molcraft:last';
 
+// render()가 불릴 때마다 동기로 쓰면(마우스 이동·슬라이더 한 칸마다) 문자열 직렬화 +
+// localStorage 쓰기가 프레임을 막는다. 마지막 조작에서 400 ms 뒤 한 번만 쓴다.
+let saveTimer;
 function saveLocal() {
-  try { localStorage.setItem(LS_KEY, encodeState(state.mol)); }
-  catch { /* 용량 초과·프라이빗 모드 등은 무시한다. 저장 실패가 앱을 막으면 안 된다. */ }
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(LS_KEY, encodeState(state.mol)); }
+    catch { /* 용량 초과·프라이빗 모드 등은 무시한다. 저장 실패가 앱을 막으면 안 된다. */ }
+  }, 400);
 }
 
 function restoreLocal() {
@@ -81,39 +86,6 @@ document.addEventListener('wheel', (ev) => {
   viewer.render();
 }, { capture: true, passive: false });
 
-// 배경 3D 참조 격자를 정육면체 6면 전부에 그린다(1 Å 간격, 5칸마다 굵은 선).
-// 바닥 한 장뿐이면 뒤에서 볼 때 깊이감이 사라진다 — 방(room) 형태여야 어느 각도로
-// 돌려도 위치 감각이 유지된다.
-// 한 번만 만들어 핸들을 들고 있는다 — render()가 매번 지웠다 새로 그리면(150개 넘는 선을
-// 클릭·드래그·슬라이더 조작마다 재생성) 조작감이 뚝뚝 끊긴다. 그리드는 분자와 무관한
-// 고정 배경이므로 render()의 생명주기에서 완전히 떼어낸다.
-let gridShapes = [];
-function buildGrid() {
-  if (gridShapes.length > 0) return;
-  const N = 6;
-  for (let i = -N; i <= N; i++) {
-    const color = i % 5 === 0 ? '#94a3b8' : '#cbd5e1';
-    for (const y of [-N, N]) { // 위/아래(XZ면)
-      gridShapes.push(viewer.addLine({ start: { x: -N, y, z: i }, end: { x: N, y, z: i }, color }));
-      gridShapes.push(viewer.addLine({ start: { x: i, y, z: -N }, end: { x: i, y, z: N }, color }));
-    }
-    for (const z of [-N, N]) { // 앞/뒤(XY면)
-      gridShapes.push(viewer.addLine({ start: { x: -N, y: i, z }, end: { x: N, y: i, z }, color }));
-      gridShapes.push(viewer.addLine({ start: { x: i, y: -N, z }, end: { x: i, y: N, z }, color }));
-    }
-    for (const x of [-N, N]) { // 좌/우(YZ면)
-      gridShapes.push(viewer.addLine({ start: { x, y: -N, z: i }, end: { x, y: N, z: i }, color }));
-      gridShapes.push(viewer.addLine({ start: { x, y: i, z: -N }, end: { x, y: i, z: N }, color }));
-    }
-  }
-  viewer.render();
-}
-function clearGrid() {
-  for (const s of gridShapes) viewer.removeShape(s);
-  gridShapes = [];
-  viewer.render();
-}
-
 // atom.serial과 동일한 규칙(XYZ 모델 0-based 배열 인덱스)으로 페이지 좌표(pageX/Y)에
 // 가장 가까운 원자를 찾는다. modelToScreen이 canvasOffset(rect+scroll)을 더해 반환하므로
 // clientX/Y가 아니라 pageX/Y와 비교해야 스크롤된 페이지에서도 어긋나지 않는다.
@@ -147,12 +119,11 @@ let warnShapes = [];      // 문제 원자 위의 경고 표식 — 같은 생�
 let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
 
 function render() {
-  const e = energy(state.mol);
+  const e = energy(state.mol, cachedTerms(state.mol));
   state.lastEnergy = e;
   viewer.removeAllModels();
-  // removeAllShapes()는 쓰지 않는다 — 그리드(고정 배경)와 붙이기 고스트를 함께 지워버려서,
-  // 클릭·드래그·슬라이더 조작마다(즉 render()가 불릴 때마다) 150개 넘는 격자선을 다시 그리게
-  // 되어 조작감이 뚝뚝 끊겼다. 이 함수가 만든 선택 강조 구만 추적해서 그것만 지운다.
+  // removeAllShapes()는 쓰지 않는다 — 붙이기 고스트까지 함께 지워버리기 때문이다.
+  // 이 함수가 만든 선택 강조 구와 경고 표식만 추적해서 그것만 지운다.
   for (const s of selectionShapes) viewer.removeShape(s);
   selectionShapes = [];
   for (const s of warnShapes) viewer.removeShape(s);
@@ -160,11 +131,13 @@ function render() {
   viewer.addModel(toXYZ(state.mol), 'xyz');
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
-  state.mol.atoms.forEach((a, i) => {
-    viewer.setStyle({ serial: i }, {
-      sphere: { radius: 0.30, color: strainColor(e.perAtom[i], vmax) },
-      stick: { radius: 0.14, color: strainColor(e.perAtom[i], vmax) },
-    });
+  // 원자마다 setStyle을 부르면 3Dmol이 호출마다 전체 원자를 훑어서 O(n²)가 된다 —
+  // 원자 수십 개만 돼도 클릭·드래그가 눈에 띄게 끊겼다. 색만 원자별로 다르므로
+  // colorfunc 하나로 넘겨 setStyle은 딱 한 번만 부른다(serial = XYZ 모델의 0-based 인덱스).
+  const colors = state.mol.atoms.map((_, i) => strainColor(e.perAtom[i], vmax));
+  viewer.setStyle({}, {
+    sphere: { radius: 0.30, colorfunc: (atom) => colors[atom.serial] },
+    stick: { radius: 0.14, colorfunc: (atom) => colors[atom.serial] },
   });
 
   // 선택된 원자는 반투명 노란 구로 강조
@@ -889,15 +862,8 @@ $('mode').onchange = (ev) => {
   render();
 };
 
-// 그리드는 render()와 분리된 고정 배경이므로(위 buildGrid 주석 참고) 켜고 끌 때
-// 스스로 만들고 지우기만 하면 된다 — 분자 재계산은 필요 없다.
-$('grid').onchange = (ev) => {
-  state.showGrid = ev.target.checked;
-  if (state.showGrid) buildGrid(); else clearGrid();
-};
 document.body.dataset.mode = state.mode;
 setTool('select');
-if (state.showGrid) buildGrid();
 
 $('preset').innerHTML = Object.entries(PRESETS)
   .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
