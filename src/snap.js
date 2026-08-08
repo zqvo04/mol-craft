@@ -59,6 +59,20 @@ export function canBond(mol, i, j) {
   return { ok: true, reason, targetLength: bondLength(ti, tj, 1) };
 }
 
+// 결합 도구('기존 원자 두 개를 잇기') 전용 거리 판정. canBond에는 절대 넣지 않는다 —
+// attachAtom/previewAttach가 새 원자를 임시로 2.5 Å(2D는 원점) 자리에 꽂고 canBond를
+// 부르는 구조라, 거기에 거리 조건이 들어가면 붙이기 자체가 막힌다.
+// 배수를 넉넉히 잡는 이유: 이 도구의 주 용도인 고리 닫기에서는 갓 그린 사슬의 양 끝이
+// 3~4 Å 떨어져 있는 게 정상이다. 그보다 멀면 사용자가 엉뚱한 원자를 찍은 것으로 본다
+// (10 Å 결합은 신축 에너지 25,000 kcal/mol짜리 막대가 되어 화면을 가로지른다).
+export const BOND_TOOL_MAX_FACTOR = 3.0;
+
+export function bondDistanceOk(mol, i, j) {
+  const check = canBond(mol, i, j);
+  if (!check.ok) return false;
+  return distance(mol.atoms[i].pos, mol.atoms[j].pos) <= check.targetLength * BOND_TOOL_MAX_FACTOR;
+}
+
 // moving 원자를 anchor 쪽으로 '자석처럼' 당길 목표 좌표.
 // 방향은 그대로 두고 거리만 UFF 평형 길이로 맞춘다.
 export function snapTarget(mol, moving, anchor) {

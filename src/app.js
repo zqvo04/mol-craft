@@ -5,7 +5,7 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
-  geometryName,
+  geometryName, bondDistanceOk,
 } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -328,6 +328,7 @@ const REASON_MSG = {
   'unsupported-element': '지원하지 않는 원소입니다',
   'same-atom': '같은 원자입니다',
   'valence-full': '원자가가 가득 찼습니다 — 더 붙일 수 없습니다',
+  'too-far': '너무 멀리 떨어진 원자입니다 — 가까운 원자끼리 이으세요',
 };
 
 // anchor에 현재 팔레트 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
@@ -699,8 +700,18 @@ function handleBondClick(hit) {
     render();
     return;
   }
+  if (!bondDistanceOk(state.mol, anchor, hit)) {
+    toast(REASON_MSG['too-far'], 'err');
+    playClick(180);
+    render();
+    return;
+  }
   pushUndo();
   addBond(state.mol, anchor, hit, 1);
+  // 고리를 닫으면 두 끝이 아직 제 결합 길이가 아니다 — 붙이기와 달리 위치를 새로 정하는
+  // 조작이 아니므로, 여기서만 완화를 돌려 실제 구조로 만든다(붙이기는 "본 자리에 그대로
+  // 박힌다"를 지켜야 하므로 자동 완화하지 않는다).
+  minimize(state.mol, { maxSteps: 200 });
   playClick(880);
   checkSnaps();
   render();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens, hudSummary, geometryName,
+  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -302,4 +302,26 @@ test('stability: 원자가가 꽉 찬 분자에는 부족 경고가 없다', () 
   minimize(m);
   assert.deepEqual(stability(m).issues.filter((x) => x.msg.includes('원자가 부족')), []);
   assert.equal(stability(m).score, 100);
+});
+
+test('bondDistanceOk: 결합 길이의 3배를 넘으면 거부한다', () => {
+  const near = createMolecule();
+  addAtom(near, 'C', [0, 0, 0]);
+  addAtom(near, 'C', [1.6, 0, 0]);
+  assert.equal(bondDistanceOk(near, 0, 1), true);
+
+  const ring = createMolecule();
+  addAtom(ring, 'C', [0, 0, 0]);
+  addAtom(ring, 'C', [3.8, 0, 0]);   // 갓 그린 사슬의 양 끝 정도 — 고리 닫기는 허용해야 한다
+  assert.equal(bondDistanceOk(ring, 0, 1), true);
+
+  const far = createMolecule();
+  addAtom(far, 'C', [0, 0, 0]);
+  addAtom(far, 'C', [10, 0, 0]);     // 진단에서 25,189 kcal/mol이 나온 거리
+  assert.equal(bondDistanceOk(far, 0, 1), false);
+});
+
+test('bondDistanceOk: 애초에 결합 불가한 쌍은 거리와 무관하게 false', () => {
+  const m = loadPreset('methane');
+  assert.equal(bondDistanceOk(m, 0, 1), false); // 이미 결합됨
 });
