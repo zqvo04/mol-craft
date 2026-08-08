@@ -1,5 +1,5 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
-import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
+import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
   neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
 } from './model.js';
@@ -294,37 +294,6 @@ function updateDihedralPanel() {
   $('dihedral-info').textContent = `${deg}°`;
 }
 
-// 라이브러리 없이 인라인 SVG 꺾은선. 최소/최대는 색상뿐 아니라 모양(원/다이아몬드)으로도
-// 구분한다(색맹 사용자 대응). 곡선 아래 텍스트 요약이 접근성 폴백 데이터 테이블 역할을 한다.
-function drawScan(points) {
-  const W = 290, H = 160, PAD_L = 30, PAD_B = 22, PAD_T = 12, PAD_R = 8;
-  const ys = points.map((p) => p.relative);
-  const ymax = Math.max(...ys, 0.5);
-  const x = (a) => PAD_L + ((a + 180) / 360) * (W - PAD_L - PAD_R);
-  const y = (v) => H - PAD_B - (v / ymax) * (H - PAD_B - PAD_T);
-  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.angle).toFixed(1)},${y(p.relative).toFixed(1)}`).join('');
-  const min = points.reduce((a, b) => (a.relative < b.relative ? a : b));
-  const max = points.reduce((a, b) => (a.relative > b.relative ? a : b));
-
-  $('chart').innerHTML = `
-  <svg viewBox="0 0 ${W} ${H}" width="100%" role="img"
-       aria-label="이면각에 따른 상대 에너지 곡선. 회전장벽 ${max.relative.toFixed(2)} kcal/mol, 최소 ${min.angle}도, 최대 ${max.angle}도">
-    <line x1="${PAD_L}" y1="${H - PAD_B}" x2="${W - PAD_R}" y2="${H - PAD_B}" style="stroke:var(--border)"/>
-    <line x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${H - PAD_B}" style="stroke:var(--border)"/>
-    <path d="${path}" fill="none" style="stroke:var(--primary)" stroke-width="2"/>
-    <circle cx="${x(min.angle)}" cy="${y(min.relative)}" r="3.5" style="fill:var(--success)"/>
-    <rect x="${x(max.angle) - 3}" y="${y(max.relative) - 3}" width="6" height="6"
-          style="fill:var(--accent)" transform="rotate(45 ${x(max.angle).toFixed(1)} ${y(max.relative).toFixed(1)})"/>
-    <text x="${PAD_L}" y="${H - 8}" font-size="9" style="fill:var(--muted-fg)">-180°</text>
-    <text x="${x(0).toFixed(1)}" y="${H - 8}" font-size="9" text-anchor="middle" style="fill:var(--muted-fg)">0°</text>
-    <text x="${W - PAD_R}" y="${H - 8}" font-size="9" text-anchor="end" style="fill:var(--muted-fg)">180°</text>
-    <text x="2" y="${PAD_T + 6}" font-size="9" style="fill:var(--muted-fg)">${ymax.toFixed(1)}</text>
-    <text x="2" y="${H - PAD_B}" font-size="9" style="fill:var(--muted-fg)">0</text>
-  </svg>
-  <div style="font-size:12px">회전장벽 <b>${max.relative.toFixed(2)}</b> kcal/mol
-  · 최소 ${min.angle}° · 최대 ${max.angle}°</div>`;
-}
-
 function toggleSelect(i) {
   const idx = state.selection.indexOf(i);
   if (idx === -1) state.selection.push(i); else state.selection.splice(idx, 1);
@@ -464,22 +433,6 @@ function checkSnaps() {
   }
   state.snapState = next;
 }
-
-$('scan').onclick = () => {
-  if (state.selection.length !== 4) { toast('원자 4개를 순서대로 선택하세요', 'err'); return; }
-  if (!isTorsionChain(state.mol, state.selection)) {
-    toast('이어진 원자 4개(i-j-k-l)를 선택하세요', 'err');
-    return;
-  }
-  try {
-    drawScan(scanDihedral(state.mol, state.selection, {
-      stepDeg: Number($('scan-step').value),
-      relax: $('scan-relax').checked,
-    }));
-  } catch (err) {
-    toast(err.message, 'err');
-  }
-};
 
 $('dihedral').oninput = (ev) => {
   if (state.selection.length !== 4) return;

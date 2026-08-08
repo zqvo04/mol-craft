@@ -199,10 +199,6 @@
     <option value="strain">응력 히트맵</option>
   </select>
   <button id="minimize">구조 최적화</button>
-  <button id="scan">이면각 스캔</button>
-  <select id="scan-step" title="스캔 각도 간격"><option value="5">5°</option><option value="10" selected>10°</option>
-    <option value="15">15°</option><option value="30">30°</option></select>
-  <label class="check"><input type="checkbox" id="scan-relax">완화 스캔</label>
   <button id="export-xyz">XYZ</button>
   <button id="export-mol">MOL</button>
   <button id="export-pdb">PDB</button>
@@ -242,7 +238,6 @@
     <input id="replay" type="range" min="0" max="0" value="0" style="width:100%" disabled>
     <div id="replay-info" style="font-size:12px">구조 최적화를 실행하면 활성화됩니다</div>
   </section>
-  <section><h2>이면각 스캔</h2><div id="chart">회전 가능한 결합의 원자 4개를 선택하세요</div></section>
   <section><h2>VSEPR 상태</h2><div id="vsepr">—</div></section>
   <section id="gallery-section" hidden><h2>공개 갤러리</h2><div id="gallery">불러오는 중…</div></section>
 </aside>
