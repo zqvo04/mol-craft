@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors, measure } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder,
+  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder, electronDomains,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -360,4 +360,58 @@ test('cycleBondOrder: 아세트산을 실제로 만들 수 있다 (C2H4O2 회귀
   minimize(m);
   assert.ok(Math.abs(measure(m, [1, 2]) - 1.21) < 0.06, `C=O 길이 ${measure(m, [1, 2])}`);
   assert.ok(Math.abs(measure(m, [1, 3]) - 1.36) < 0.06, `C-O 길이 ${measure(m, [1, 3])}`);
+});
+
+test('openSlots: 이중결합 탄소는 120°짜리 빈 자리 2개를 준다 (sp2 회귀)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.33, 0, 0]);
+  addBond(m, 0, 1, 2);
+  const slots = openSlots(m, 0);
+  assert.equal(slots.length, 2, 'sp2 탄소의 남은 시그마 자리는 2개다');
+  for (const v of slots) {
+    assert.ok(Math.abs(angleBetween(v, [1, 0, 0]) - 120) < 1.5, `C=C와의 각: ${angleBetween(v, [1, 0, 0])}`);
+  }
+});
+
+test('openSlots: 삼중결합 탄소는 180°짜리 빈 자리 1개를 준다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.2, 0, 0]);
+  addBond(m, 0, 1, 3);
+  const slots = openSlots(m, 0);
+  assert.equal(slots.length, 1);
+  assert.ok(Math.abs(angleBetween(slots[0], [1, 0, 0]) - 180) < 1.5);
+});
+
+test('openSlots: 단일결합만 있는 중심은 예전 그대로다 (회귀 방지)', () => {
+  const c = createMolecule();
+  addAtom(c, 'C', [0, 0, 0]);
+  addAtom(c, 'H', [1.1, 0, 0]);
+  addBond(c, 0, 1, 1);
+  assert.equal(openSlots(c, 0).length, 3);
+  assert.ok(Math.abs(angleBetween(openSlots(c, 0)[0], [1, 0, 0]) - 109.47) < 1.5);
+
+  const w = loadPreset('water');
+  assert.equal(openSlots(w, 0).length, 2); // 비공유쌍 자리 2개
+});
+
+test('electronDomains: π 결합은 시그마 자리를 차지하지 않는다', () => {
+  const ene = createMolecule();
+  addAtom(ene, 'C', [0, 0, 0]); addAtom(ene, 'C', [1.33, 0, 0]);
+  addBond(ene, 0, 1, 2);
+  assert.equal(electronDomains(ene, 0), 3);            // sp2
+
+  const yne = createMolecule();
+  addAtom(yne, 'C', [0, 0, 0]); addAtom(yne, 'C', [1.2, 0, 0]);
+  addBond(yne, 0, 1, 3);
+  assert.equal(electronDomains(yne, 0), 2);            // sp
+
+  const co = createMolecule();
+  addAtom(co, 'C', [0, 0, 0]); addAtom(co, 'O', [1.21, 0, 0]);
+  addBond(co, 0, 1, 2);
+  assert.equal(electronDomains(co, 1), 3);            // 카보닐 O: 시그마1 + 비공유쌍2
+
+  assert.equal(electronDomains(loadPreset('water'), 0), 4);   // 물은 그대로
+  assert.equal(electronDomains(loadPreset('methane'), 0), 4); // 메탄도 그대로
 });
