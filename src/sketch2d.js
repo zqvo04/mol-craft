@@ -318,12 +318,38 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
   // 골격식은 이 경우 성립하지 않는 표기법이므로 분자식 텍스트로 대신한다.
   // 붙어있는 원자 하나는 지우개/선택이 동작하도록 히트타깃만 남겨둔다(고스트 미리보기는
   // 그릴 골격이 없어 지원하지 않음 — 문서화된 한계).
+  // 무거운 원자가 1개뿐이면(NH3·H2O·CH4 등) 골격식이 성립하지 않는다 — 탄소 골격이 없어
+  // 그릴 선이 없기 때문이다. 예전엔 분자식 텍스트만 찍었는데, 화학 교재는 이런 분자를
+  // 중심 원자 + 명시적 H의 구조식으로 그린다. 수소를 방사형으로 균등 배치하고 중심과
+  // 각 H 모두에 히트타깃을 붙여, 2D에서도 붙이기/지우개/선택이 그대로 동작하게 한다.
   if (pos.size <= 1) {
-    const lone = [...pos.keys()][0];
-    const hit = lone === undefined ? ''
-      : `<circle data-atom="${lone}" cx="70" cy="25" r="16" fill="transparent" style="cursor:pointer"/>`;
-    return `<svg viewBox="0 0 140 40">${hit}<text x="70" y="25" text-anchor="middle" font-size="16" `
-      + `fill="var(--fg)" font-family="sans-serif">${formula(mol)}</text></svg>`;
+    const center = [...pos.keys()][0];
+    if (center === undefined) {
+      return `<svg viewBox="0 0 140 40"><text x="70" y="25" text-anchor="middle" font-size="16" `
+        + `fill="var(--fg)" font-family="sans-serif">${formula(mol)}</text></svg>`;
+    }
+    const hs = neighbors(mol, center).filter((n) => mol.atoms[n].el === 'H');
+    const R = 46, CX = 90, CY = 90;
+    let body = '';
+    hs.forEach((h, k) => {
+      // 위쪽(-90°)에서 시작해 시계 방향으로 균등 분배한다.
+      const t = (-90 + (360 / hs.length) * k) * Math.PI / 180;
+      const [hx, hy] = [CX + R * Math.cos(t), CY + R * Math.sin(t)];
+      // 결합선은 양끝 라벨을 피해 안쪽으로 물린다.
+      const [sxp, syp] = [CX + 15 * Math.cos(t), CY + 15 * Math.sin(t)];
+      const [exp, eyp] = [CX + (R - 13) * Math.cos(t), CY + (R - 13) * Math.sin(t)];
+      body += `<line x1="${sxp.toFixed(1)}" y1="${syp.toFixed(1)}" x2="${exp.toFixed(1)}" y2="${eyp.toFixed(1)}" `
+        + 'stroke="var(--fg)" stroke-width="1.6"/>'
+        + `<text x="${hx.toFixed(1)}" y="${(hy + 5).toFixed(1)}" text-anchor="middle" font-size="15" `
+        + 'fill="var(--fg)" font-family="sans-serif">H</text>'
+        + `<circle data-atom="${h}" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="12" `
+        + 'fill="transparent" style="cursor:pointer"/>';
+    });
+    const bad = new Set(stability(mol).issues.map((x) => x.atom));
+    return `<svg viewBox="0 0 180 180" width="100%" height="100%">${body}`
+      + `<text x="${CX}" y="${CY + 6}" text-anchor="middle" font-size="18" `
+      + `fill="${bad.has(center) ? '#dc2626' : 'var(--fg)'}" font-family="sans-serif">${mol.atoms[center].el}</text>`
+      + `<circle data-atom="${center}" cx="${CX}" cy="${CY}" r="14" fill="transparent" style="cursor:pointer"/></svg>`;
   }
 
   const heavyBonds = mol.bonds.filter((b) => mol.atoms[b.i].el !== 'H' && mol.atoms[b.j].el !== 'H');
