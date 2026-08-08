@@ -239,3 +239,18 @@ test('renderSVG 규칙 2.6: 이중/삼중결합은 dz가 커도 쐐기/파선 �
   assert.ok(!svg.includes('<polygon'));
   assert.equal((svg.match(/<line/g) || []).length, 2);
 });
+
+// ---- 7단계: 선택 상태 표시 --------------------------------------------------------
+
+test('renderSVG: 선택된 무거운 원자를 노란 원으로 표시한다', () => {
+  const m = loadPreset('ethane');
+  assert.ok(!renderSVG(m).includes('data-sel'), '선택이 없으면 표시하지 않는다');
+  const svg = renderSVG(m, { selection: [0] });
+  assert.equal((svg.match(/data-sel/g) ?? []).length, 1);
+});
+
+test('renderSVG: 2D 좌표가 없는 수소를 선택해도 터지지 않는다', () => {
+  const m = loadPreset('ethane');
+  const svg = renderSVG(m, { selection: [2] }); // 원자 2는 H — layout()이 배치하지 않는다
+  assert.ok(!svg.includes('data-sel'));
+});

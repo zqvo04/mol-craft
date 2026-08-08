@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond } from '../src/model.js';
-import { typeAtom, hybridization, bondLength, buildTerms, energy, gradient, minimize } from '../src/uff.js';
+import {
+  typeAtom, hybridization, bondLength, buildTerms, energy, gradient, minimize, topologyKey, cachedTerms,
+} from '../src/uff.js';
 import { UFF_PARAMS } from '../src/params.js';
+import { loadPreset } from '../src/presets.js';
 
 function build(spec) {
   const m = createMolecule();
@@ -181,4 +184,54 @@ test('frozen 원자는 움직이지 않는다', () => {
   const fixed = [...m.atoms[1].pos];
   minimize(m, { frozen: new Set([1]) });
   assert.deepEqual(m.atoms[1].pos, fixed);
+});
+
+test('단일결합 2개짜리 탄소는 sp3다 (C_1 오분류 회귀)', () => {
+  const m = build({
+    atoms: [['C', [0, 0, 0]], ['C', [1.5, 0, 0]], ['C', [3, 0, 0]]],
+    bonds: [[0, 1], [1, 2]],
+  });
+  assert.equal(typeAtom(m, 1), 'C_3');
+  assert.equal(UFF_PARAMS[typeAtom(m, 1)].theta0, 109.47);
+});
+
+test('이중결합이 있는 탄소는 sp2, 삼중이면 sp', () => {
+  const ene = build({ atoms: [['C', [0, 0, 0]], ['C', [1.33, 0, 0]]], bonds: [[0, 1, 2]] });
+  assert.equal(typeAtom(ene, 0), 'C_2');
+  const yne = build({ atoms: [['C', [0, 0, 0]], ['C', [1.2, 0, 0]]], bonds: [[0, 1, 3]] });
+  assert.equal(typeAtom(yne, 0), 'C_1');
+});
+
+test('단일결합 1개짜리 질소·산소는 sp3다', () => {
+  const m = build({
+    atoms: [['C', [0, 0, 0]], ['N', [1.4, 0, 0]], ['O', [-1.4, 0, 0]]],
+    bonds: [[0, 1], [0, 2]],
+  });
+  assert.equal(typeAtom(m, 1), 'N_3');
+  assert.equal(typeAtom(m, 2), 'O_3');
+});
+
+test('topologyKey는 좌표에 반응하지 않고 결합·원소에만 반응한다', () => {
+  const a = build({ atoms: [['C', [0, 0, 0]], ['H', [1.1, 0, 0]]], bonds: [[0, 1]] });
+  const b = build({ atoms: [['C', [5, 5, 5]], ['H', [6.1, 5, 5]]], bonds: [[0, 1]] });
+  assert.equal(topologyKey(a), topologyKey(b));
+
+  const c = build({ atoms: [['C', [0, 0, 0]], ['H', [1.1, 0, 0]]], bonds: [[0, 1, 2]] });
+  assert.notEqual(topologyKey(a), topologyKey(c));
+
+  const d = build({ atoms: [['C', [0, 0, 0]], ['F', [1.1, 0, 0]]], bonds: [[0, 1]] });
+  assert.notEqual(topologyKey(a), topologyKey(d));
+});
+
+test('cachedTerms는 같은 위상이면 같은 배열을 재사용하고, 바뀌면 새로 만든다', () => {
+  const m = loadPreset('ethane');
+  const t1 = cachedTerms(m);
+  m.atoms[0].pos[0] += 0.3;            // 좌표만 이동
+  assert.equal(cachedTerms(m), t1, '좌표 변화로 재생성하면 안 된다');
+  assert.ok(Math.abs(energy(m, cachedTerms(m)).total - energy(m).total) < 1e-9,
+    '캐시된 항으로 계산한 에너지가 새로 만든 항과 같아야 한다');
+
+  addAtom(m, 'H', [9, 9, 9]);
+  addBond(m, 0, m.atoms.length - 1);   // 위상 변화
+  assert.notEqual(cachedTerms(m), t1, '위상이 바뀌면 새로 만들어야 한다');
 });
