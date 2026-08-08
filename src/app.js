@@ -17,9 +17,8 @@ const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I']
 
 const state = {
   mol: loadPreset('methane'),
-  mode: 'learn',
   colorBy: 'element', // 'element' | 'strain' — 조립 중에는 원소 구분이 우선이라 원소 색이 기본이다
-  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
+  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작.
   element: 'C',
   selection: [],
   snapState: {},
@@ -392,9 +391,10 @@ function attachAtom(anchor, { pos2d, dir } = {}) {
   if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
   else playClick(880);
 
-  // pos2d로 붙인 경우는 z=0 평면 배치를 그대로 유지한다 — 여기서 바로 최적화하면
-  // 2D 레이아웃이 흐트러진다. 3D 형태로 풀어주는 건 view2d 핸들러가 2D->3D 전환 시 담당한다.
-  if (state.mode === 'learn' && !pos2d) minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
+  // 붙인 원자는 미리보기로 보여준 자리에 그대로 남는다 — openSlots가 이미 정확한 VSEPR
+  // 방향과 UFF 평형 길이로 놓으므로 국소적으로는 이미 최적에 가깝다. 전체 완화가 필요하면
+  // 사용자가 '구조 최적화'를 누른다(예전 학습 모드의 자동 최적화는 붙일 때마다 구조 전체를
+  // 움직여서 "본 자리에 박힌다"는 감각을 깨뜨렸다).
   checkSnaps();
   render();
 }
@@ -937,12 +937,6 @@ $('view2d').onclick = () => {
   render();
 };
 
-$('mode').onchange = (ev) => {
-  state.mode = ev.target.value;
-  document.body.dataset.mode = state.mode;
-  render();
-};
-
 $('colorby').onchange = (ev) => {
   state.colorBy = ev.target.value;
   document.body.dataset.colorby = state.colorBy;
@@ -950,7 +944,6 @@ $('colorby').onchange = (ev) => {
 };
 document.body.dataset.colorby = state.colorBy;
 
-document.body.dataset.mode = state.mode;
 setTool('select');
 
 $('preset').innerHTML = Object.entries(PRESETS)

@@ -151,9 +151,6 @@
     aside { border-left: none; border-top: 1px solid var(--border); }
     #disclaimer { max-width: none; text-align: left; margin-left: 0; }
   }
-  /* 연구 모드에서만 보이는 분석 패널(항별 분해, 리플레이)을 CSS로만 나눈다 —
-     조립/측정 도구는 이제 모드와 무관하다(도구=클릭 동작, 모드=패널 노출). */
-  body[data-mode="learn"] .research-only { display: none; }
   #sketch2d {
     position: absolute; inset: 0; z-index: 5;
     background: var(--bg);
@@ -196,7 +193,6 @@
 <body>
 <header>
   <strong>mol-craft</strong>
-  <select id="mode"><option value="learn">학습 모드</option><option value="research">연구 모드</option></select>
   <select id="preset"></select>
   <select id="colorby" title="원자 색을 무엇으로 칠할지">
     <option value="element">원소 색</option>
@@ -236,13 +232,13 @@
 </div>
 <aside>
   <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>
-  <section class="research-only"><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
+  <section><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
   <section><h2>선택 측정</h2><div id="measure">원자를 2~4개 클릭</div></section>
   <section><h2>이면각 회전</h2>
     <input id="dihedral" type="range" min="-180" max="180" value="0" style="width:100%" disabled>
     <div id="dihedral-info" style="font-size:12px">원자 4개를 순서대로 선택하면 활성화됩니다</div>
   </section>
-  <section class="research-only"><h2>최적화 리플레이</h2>
+  <section><h2>최적화 리플레이</h2>
     <input id="replay" type="range" min="0" max="0" value="0" style="width:100%" disabled>
     <div id="replay-info" style="font-size:12px">구조 최적화를 실행하면 활성화됩니다</div>
   </section>
