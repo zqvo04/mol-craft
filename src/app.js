@@ -5,7 +5,7 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
-  geometryName, bondDistanceOk,
+  geometryName, bondDistanceOk, cycleBondOrder,
 } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -97,6 +97,19 @@ function pickAtom(px, py, thresholdPx = 24) {
     const s = viewer.modelToScreen({ x: p[0], y: p[1], z: p[2] });
     const d = Math.hypot(s.x - px, s.y - py);
     if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// 결합 중점을 화면에 투영해 가장 가까운 결합을 찾는다(pickAtom과 같은 좌표 규칙).
+// 임계값을 원자보다 작게 잡아, 원자 근처에서는 원자 클릭이 이기게 한다.
+function pickBond(px, py, thresholdPx = 16) {
+  let best = null, bestD = thresholdPx;
+  for (const b of state.mol.bonds) {
+    const p = state.mol.atoms[b.i].pos, q = state.mol.atoms[b.j].pos;
+    const s = viewer.modelToScreen({ x: (p[0] + q[0]) / 2, y: (p[1] + q[1]) / 2, z: (p[2] + q[2]) / 2 });
+    const d = Math.hypot(s.x - px, s.y - py);
+    if (d < bestD) { bestD = d; best = b; }
   }
   return best;
 }
@@ -693,6 +706,25 @@ function handleAtomClick(hit, shiftKey) {
   else { state.selection = [hit]; render(); }
 }
 
+// 결합 도구로 결합선을 클릭하면 차수를 1 -> 2 -> 3 -> 1로 돌린다(원자를 클릭하면
+// 기존대로 두 원자를 잇는다 — 같은 도구 안에서 클릭 대상으로만 갈린다).
+function handleBondOrderClick(bond) {
+  const r = cycleBondOrder(state.mol, bond);
+  if (!r.ok) {
+    toast(REASON_MSG[r.reason] ?? '차수를 바꿀 수 없습니다', 'err');
+    playClick(180);
+    return;
+  }
+  // cycleBondOrder가 이미 제자리에서 바꿔버렸으므로, 되돌리기 스냅샷은 되돌린 뒤에 찍는다.
+  bond.order = r.order === 1 ? 3 : r.order - 1;
+  pushUndo();
+  bond.order = r.order;
+  playClick(660 + r.order * 220);
+  toast(`결합 차수 ${r.order}`);
+  checkSnaps();
+  render();
+}
+
 // '결합' 도구: 첫 클릭은 앵커를 대기시키고, 두 번째 클릭이 그 앵커를 실제로 잇는다
 // (같은 원자를 다시 클릭하면 대기 취소). 기존 원자 두 개를 잇는 유일한 경로 — 이게
 // 있어야 사슬을 고리로 닫을 수 있다(findRings/layout은 이미 임의 고리 위상을 다룬다).
@@ -735,7 +767,13 @@ viewerEl.addEventListener('click', (ev) => {
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
-  if (hit === -1) return;
+  if (hit === -1) {
+    if (state.tool === 'bond') {
+      const b = pickBond(ev.pageX, ev.pageY);
+      if (b) handleBondOrderClick(b);
+    }
+    return;
+  }
   handleAtomClick(hit, ev.shiftKey);
 });
 
@@ -819,7 +857,15 @@ sketch2dEl.addEventListener('pointerleave', () => {
 sketch2dEl.addEventListener('click', (ev) => {
   if (!state.flat) return;
   const hit = ev.target.closest('[data-atom]');
-  if (!hit) return;
+  if (!hit) {
+    const bh = ev.target.closest('[data-bond]');
+    if (bh && state.tool === 'bond') {
+      const [i, j] = bh.dataset.bond.split('-').map(Number);
+      const bond = state.mol.bonds.find((b) => b.i === i && b.j === j);
+      if (bond) handleBondOrderClick(bond);
+    }
+    return;
+  }
   const idx = Number(hit.dataset.atom);
   if (state.tool === 'place') {
     if (!ghost2d) return;

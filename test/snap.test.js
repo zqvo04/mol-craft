@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
+import { createMolecule, addAtom, addBond, neighbors, measure } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk,
+  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -324,4 +324,40 @@ test('bondDistanceOk: 결합 길이의 3배를 넘으면 거부한다', () => {
 test('bondDistanceOk: 애초에 결합 불가한 쌍은 거리와 무관하게 false', () => {
   const m = loadPreset('methane');
   assert.equal(bondDistanceOk(m, 0, 1), false); // 이미 결합됨
+});
+
+test('cycleBondOrder: 1 -> 2 -> 3 -> 1로 순환한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.5, 0, 0]);
+  addBond(m, 0, 1, 1);
+  const b = m.bonds[0];
+  assert.equal(cycleBondOrder(m, b).order, 2);
+  assert.equal(cycleBondOrder(m, b).order, 3);
+  assert.equal(cycleBondOrder(m, b).order, 1);
+});
+
+test('cycleBondOrder: 원자가가 모자라면 올리지 않고 거부한다', () => {
+  // 메탄의 C-H: 탄소는 이미 결합 4개, 수소는 상한 1이라 이중결합이 불가능하다.
+  const m = loadPreset('methane');
+  const b = m.bonds[0];
+  const r = cycleBondOrder(m, b);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'valence-full');
+  assert.equal(b.order, 1, '거부했으면 차수를 바꾸면 안 된다');
+});
+
+test('cycleBondOrder: 아세트산을 실제로 만들 수 있다 (C2H4O2 회귀)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);        // 0 메틸 C
+  addAtom(m, 'C', [1.5, 0, 0]);      // 1 카복실 C
+  addAtom(m, 'O', [2.1, 1.1, 0]);    // 2 카보닐 O
+  addAtom(m, 'O', [2.1, -1.1, 0]);   // 3 하이드록실 O
+  addBond(m, 0, 1, 1); addBond(m, 1, 2, 1); addBond(m, 1, 3, 1);
+  assert.equal(cycleBondOrder(m, m.bonds[1]).order, 2); // C1=O2로 올린다
+  syncHydrogens(m);
+  assert.equal(formula(m), 'C2H4O2');
+  minimize(m);
+  assert.ok(Math.abs(measure(m, [1, 2]) - 1.21) < 0.06, `C=O 길이 ${measure(m, [1, 2])}`);
+  assert.ok(Math.abs(measure(m, [1, 3]) - 1.36) < 0.06, `C-O 길이 ${measure(m, [1, 3])}`);
 });

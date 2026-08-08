@@ -59,6 +59,26 @@ export function canBond(mol, i, j) {
   return { ok: true, reason, targetLength: bondLength(ti, tj, 1) };
 }
 
+// 결합 차수를 1 -> 2 -> 3 -> 1로 돌린다. 올릴 때만 원자가를 확인하면 된다(내리는 건 늘 안전).
+// 이 함수가 없으면 카보닐·나이트릴·방향족을 손으로 만들 수 없다 — 아세트산을 조립하면
+// 이중결합을 못 만들어 C2H5O2(결합 1개짜리 산소 = 라디칼)라는 존재하지 않는 분자가 나왔다.
+// bond는 mol.bonds의 원소를 그대로 받아 제자리에서 고친다(addBond가 이미 같은 규약이다).
+export function cycleBondOrder(mol, bond) {
+  const next = bond.order >= 3 ? 1 : bond.order + 1;
+  const delta = next - bond.order;
+  if (delta > 0) {
+    for (const idx of [bond.i, bond.j]) {
+      const el = mol.atoms[idx].el;
+      const normal = MAX_VALENCE[el];
+      if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
+      const capMax = EXPANDED_VALENCE[el] ?? normal;
+      if (bondOrderSum(mol, idx) + delta > capMax) return { ok: false, reason: 'valence-full' };
+    }
+  }
+  bond.order = next;
+  return { ok: true, order: next };
+}
+
 // 결합 도구('기존 원자 두 개를 잇기') 전용 거리 판정. canBond에는 절대 넣지 않는다 —
 // attachAtom/previewAttach가 새 원자를 임시로 2.5 Å(2D는 원점) 자리에 꽂고 canBond를
 // 부르는 구조라, 거기에 거리 조건이 들어가면 붙이기 자체가 막힌다.

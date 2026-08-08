@@ -427,6 +427,18 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
       + 'fill="#facc15" opacity="0.35"/>';
   }
 
+  // 결합 차수 편집용 히트타깃. 원자 히트타깃(hitsSvg)보다 먼저 그려서 원자가 위에 오게 한다
+  // (원자와 결합이 겹치는 지점에서는 원자 클릭이 이겨야 한다). <line> 대신 <path>를 쓴다 —
+  // 기존 테스트들이 실제 결합선 개수를 /<line/g로 세는데, 히트타깃까지 <line>이면 그 개수가
+  // 부풀어 전부 깨진다(예: 이중결합 2개짜리 결합에서 4개로 셈).
+  let bondHitsSvg = '';
+  for (const b of heavyBonds) {
+    const p = pos.get(b.i), q = pos.get(b.j);
+    bondHitsSvg += `<path data-bond="${b.i}-${b.j}" d="M ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)} `
+      + `L ${sx(q[0]).toFixed(1)} ${sy(q[1]).toFixed(1)}" `
+      + 'stroke="transparent" stroke-width="12" style="cursor:pointer"/>';
+  }
+
   let hitsSvg = '';
   for (const i of pos.keys()) {
     const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
@@ -460,5 +472,5 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
   }
 
   return `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" width="100%" height="100%">`
-    + `${selSvg}${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}${bondPreviewSvg}</svg>`;
+    + `${selSvg}${bondsSvg}${labelsSvg}${bondHitsSvg}${hitsSvg}${ghostSvg}${bondPreviewSvg}</svg>`;
 }
