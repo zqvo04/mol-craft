@@ -7,7 +7,7 @@ import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
   geometryName, bondDistanceOk, cycleBondOrder,
 } from './snap.js';
-import { MAX_VALENCE, CPK_COLOR, COVALENT_RADIUS } from './params.js';
+import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
@@ -186,22 +186,23 @@ function render() {
       center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
     }));
   }
-  // 경고도 배지로 낸다. 기호는 HUD 칩과 똑같이 맞춘다(danger ✕ / warn ▲) — 화면 아래위에서
-  // 같은 기호를 쓰면 "이 칩이 저 원자"라는 연결이 설명 없이 읽힌다.
-  // 선택 배지와 겹치지 않게 반대쪽(아래)에 단다.
   const st = stability(state.mol);
   state.lastStability = st;
   const worst = new Map();
   for (const x of st.issues) {
     if (worst.get(x.atom) !== 'danger') worst.set(x.atom, x.level);
   }
+  // 경고는 원자를 감싸는 옅은 헤일로로 낸다. 배지(✕/▲)는 분자 위에 글자를 얹어 시선을
+  // 너무 강하게 끌었고, 그 전의 와이어프레임 구는 그물이 원자 모양을 가렸다. 반투명 구를
+  // 원자보다 조금 크게 깔면 "여기가 문제"라는 신호는 남고 형태와 CPK 색은 그대로 보인다.
+  // 어떤 문제인지(원자가 부족/초과·각도 편차)는 좌상단 HUD 칩이 글자로 알려준다.
   for (const [i, level] of worst) {
     const p = state.mol.atoms[i].pos;
-    overlayLabels.push(viewer.addLabel(level === 'danger' ? '✕' : '▲', {
-      position: { x: p[0], y: p[1] - ATOM_RADIUS - 0.30, z: p[2] },
-      backgroundColor: level === 'danger' ? '#dc2626' : '#f59e0b', backgroundOpacity: 0.95,
-      fontColor: '#ffffff', fontSize: 12, borderThickness: 0,
-      alignment: 'center', inFront: true,
+    selectionShapes.push(viewer.addSphere({
+      center: { x: p[0], y: p[1], z: p[2] },
+      radius: ATOM_RADIUS * 2.1,
+      color: level === 'danger' ? '#dc2626' : '#f59e0b',
+      opacity: level === 'danger' ? 0.24 : 0.16,
     }));
   }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
