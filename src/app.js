@@ -181,7 +181,7 @@ function render() {
     const bondPreview = state.tool === 'bond' && state.pendingBond !== null
       ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
       : null;
-    $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview });
+    $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview, selection: state.selection });
   }
   saveLocal();
 }
@@ -755,7 +755,7 @@ function renderFlat() {
   const bondPreview = state.tool === 'bond' && state.pendingBond !== null
     ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
     : null;
-  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview });
+  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview, selection: state.selection });
 }
 
 // sketch2d.layout()의 nextChainDir로 새 원자의 2D 좌표를 구해 그대로 pos([x,y,0])로 쓴다

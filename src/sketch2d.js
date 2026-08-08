@@ -312,7 +312,7 @@ function clipToLabels(p, q, pHasLabel, qHasLabel) {
 // bondPreview: '결합' 도구(기존 원자끼리 잇기 = 고리 닫기) 전용 { a, b, ok }. ghost(새 원자
 // 붙이기)와 구조가 다르다 — a/b 둘 다 이미 존재하는 원자 인덱스이고 새 원자는 만들지 않는다.
 // b가 아직 없으면(앵커만 찍고 커서를 아직 다른 원자 위로 안 옮긴 상태) 앵커 강조 원만 그린다.
-export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null } = {}) {
+export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, selection = [] } = {}) {
   const pos = layout(mol);
   // 무거운 원자가 0~1개면 선으로 그릴 골격 자체가 없다(메탄 같은 단일 탄소 등) —
   // 골격식은 이 경우 성립하지 않는 표기법이므로 분자식 텍스트로 대신한다.
@@ -417,6 +417,16 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null } 
   // 4단계(2D 레고 조립): 모든 무거운 원자(탄소 포함, 라벨 없어도)에 투명 히트타깃을
   // 둔다. 히트테스트는 SVG 네이티브 이벤트에 맡긴다 — app.js는 event.target.closest
   // ('[data-atom]')로 원자 인덱스만 읽으면 된다(3D처럼 좌표 역산 최근접 탐색 불필요).
+  // 선택 강조. 3D의 노란 반투명 구(app.render)와 같은 색·같은 의미다. 골격식은 수소에
+  // 좌표를 주지 않으므로(H는 라벨에 접힌다) pos에 있는 원자만 그린다.
+  let selSvg = '';
+  for (const i of selection) {
+    if (!pos.has(i)) continue;
+    const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
+    selSvg += `<circle data-sel="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13" `
+      + 'fill="#facc15" opacity="0.35"/>';
+  }
+
   let hitsSvg = '';
   for (const i of pos.keys()) {
     const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];
@@ -450,5 +460,5 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null } 
   }
 
   return `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" width="100%" height="100%">`
-    + `${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}${bondPreviewSvg}</svg>`;
+    + `${selSvg}${bondsSvg}${labelsSvg}${hitsSvg}${ghostSvg}${bondPreviewSvg}</svg>`;
 }
