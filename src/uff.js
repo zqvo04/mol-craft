@@ -2,7 +2,11 @@ import { neighbors, bondOrderSum, bondBetween, setDihedral } from './model.js';
 import { UFF_PARAMS } from './params.js';
 import { distance, angleDeg, dihedralDeg } from './geom.js';
 
-// 원자 타입 결정: 원소 + 이웃 수 + 결합차수 합.
+// 원자 타입 결정: 원소 + 최대 결합 차수 + 이웃 수.
+// 혼성은 결합 개수가 아니라 최대 결합 차수가 정한다 — 단일결합만 있으면 sp3, 이중이
+// 하나라도 있으면 sp2, 삼중이면 sp. 예전엔 이웃 개수로 판정해서 단일결합 2개짜리 탄소가
+// C_1(sp, theta0=180°)이 됐고, 사슬을 한 개씩 조립하는 도중이나 2D에서 골격만 그린
+// 상태에서 결합각이 실제 화학과 어긋났다.
 // 방향족(C_R/N_R/O_R)은 별도 고리 인식이 필요하므로 여기서 자동 배정하지 않는다.
 // atom.type을 직접 지정하면 그 값이 우선한다(사용자 오버라이드 및 방향족 지정 경로).
 export function typeAtom(mol, i) {
@@ -11,6 +15,9 @@ export function typeAtom(mol, i) {
   const el = a.el;
   const n = neighbors(mol, i).length;
   const bo = bondOrderSum(mol, i);
+  const maxOrder = mol.bonds
+    .filter((b) => b.i === i || b.j === i)
+    .reduce((mx, b) => Math.max(mx, b.order), 0);
   switch (el) {
     case 'H': return 'H_';
     case 'F': return 'F_';
@@ -18,9 +25,9 @@ export function typeAtom(mol, i) {
     case 'Br': return 'Br';
     case 'I': return 'I_';
     case 'B': return n >= 4 ? 'B_3' : 'B_2';
-    case 'C': return n === 4 ? 'C_3' : n === 3 ? 'C_2' : n === 2 ? 'C_1' : 'C_3';
-    case 'N': return n >= 3 ? 'N_3' : n === 2 ? 'N_2' : bo >= 3 ? 'N_1' : 'N_3';
-    case 'O': return n >= 2 ? 'O_3' : bo >= 2 ? 'O_2' : 'O_3';
+    case 'C': return maxOrder >= 3 ? 'C_1' : maxOrder === 2 ? 'C_2' : 'C_3';
+    case 'N': return maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3';
+    case 'O': return maxOrder >= 2 ? 'O_2' : 'O_3';
     case 'S': return n >= 3 ? 'S_3+6' : n === 1 && bo >= 2 ? 'S_2' : 'S_3+2';
     case 'P': return n >= 5 ? 'P_3+5' : 'P_3+3';
     case 'Si': return 'Si3';

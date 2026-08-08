@@ -182,3 +182,28 @@ test('frozen 원자는 움직이지 않는다', () => {
   minimize(m, { frozen: new Set([1]) });
   assert.deepEqual(m.atoms[1].pos, fixed);
 });
+
+test('단일결합 2개짜리 탄소는 sp3다 (C_1 오분류 회귀)', () => {
+  const m = build({
+    atoms: [['C', [0, 0, 0]], ['C', [1.5, 0, 0]], ['C', [3, 0, 0]]],
+    bonds: [[0, 1], [1, 2]],
+  });
+  assert.equal(typeAtom(m, 1), 'C_3');
+  assert.equal(UFF_PARAMS[typeAtom(m, 1)].theta0, 109.47);
+});
+
+test('이중결합이 있는 탄소는 sp2, 삼중이면 sp', () => {
+  const ene = build({ atoms: [['C', [0, 0, 0]], ['C', [1.33, 0, 0]]], bonds: [[0, 1, 2]] });
+  assert.equal(typeAtom(ene, 0), 'C_2');
+  const yne = build({ atoms: [['C', [0, 0, 0]], ['C', [1.2, 0, 0]]], bonds: [[0, 1, 3]] });
+  assert.equal(typeAtom(yne, 0), 'C_1');
+});
+
+test('단일결합 1개짜리 질소·산소는 sp3다', () => {
+  const m = build({
+    atoms: [['C', [0, 0, 0]], ['N', [1.4, 0, 0]], ['O', [-1.4, 0, 0]]],
+    bonds: [[0, 1], [0, 2]],
+  });
+  assert.equal(typeAtom(m, 1), 'N_3');
+  assert.equal(typeAtom(m, 2), 'O_3');
+});
