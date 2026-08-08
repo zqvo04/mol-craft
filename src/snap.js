@@ -1,7 +1,7 @@
 import {
   neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom,
 } from './model.js';
-import { MAX_VALENCE, EXPANDED_VALENCE } from './params.js';
+import { MAX_VALENCE, EXPANDED_VALENCE, UFF_PARAMS } from './params.js';
 import { typeAtom, bondLength } from './uff.js';
 import { sub, unit, scale, add, distance, angleDeg, cross, dot, norm } from './geom.js';
 
@@ -59,6 +59,40 @@ export function canBond(mol, i, j) {
   return { ok: true, reason, targetLength: bondLength(ti, tj, 1) };
 }
 
+// 결합 차수를 1 -> 2 -> 3 -> 1로 돌린다. 올릴 때만 원자가를 확인하면 된다(내리는 건 늘 안전).
+// 이 함수가 없으면 카보닐·나이트릴·방향족을 손으로 만들 수 없다 — 아세트산을 조립하면
+// 이중결합을 못 만들어 C2H5O2(결합 1개짜리 산소 = 라디칼)라는 존재하지 않는 분자가 나왔다.
+// bond는 mol.bonds의 원소를 그대로 받아 제자리에서 고친다(addBond가 이미 같은 규약이다).
+export function cycleBondOrder(mol, bond) {
+  const next = bond.order >= 3 ? 1 : bond.order + 1;
+  const delta = next - bond.order;
+  if (delta > 0) {
+    for (const idx of [bond.i, bond.j]) {
+      const el = mol.atoms[idx].el;
+      const normal = MAX_VALENCE[el];
+      if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
+      const capMax = EXPANDED_VALENCE[el] ?? normal;
+      if (bondOrderSum(mol, idx) + delta > capMax) return { ok: false, reason: 'valence-full' };
+    }
+  }
+  bond.order = next;
+  return { ok: true, order: next };
+}
+
+// 결합 도구('기존 원자 두 개를 잇기') 전용 거리 판정. canBond에는 절대 넣지 않는다 —
+// attachAtom/previewAttach가 새 원자를 임시로 2.5 Å(2D는 원점) 자리에 꽂고 canBond를
+// 부르는 구조라, 거기에 거리 조건이 들어가면 붙이기 자체가 막힌다.
+// 배수를 넉넉히 잡는 이유: 이 도구의 주 용도인 고리 닫기에서는 갓 그린 사슬의 양 끝이
+// 3~4 Å 떨어져 있는 게 정상이다. 그보다 멀면 사용자가 엉뚱한 원자를 찍은 것으로 본다
+// (10 Å 결합은 신축 에너지 25,000 kcal/mol짜리 막대가 되어 화면을 가로지른다).
+export const BOND_TOOL_MAX_FACTOR = 3.0;
+
+export function bondDistanceOk(mol, i, j) {
+  const check = canBond(mol, i, j);
+  if (!check.ok) return false;
+  return distance(mol.atoms[i].pos, mol.atoms[j].pos) <= check.targetLength * BOND_TOOL_MAX_FACTOR;
+}
+
 // moving 원자를 anchor 쪽으로 '자석처럼' 당길 목표 좌표.
 // 방향은 그대로 두고 거리만 UFF 평형 길이로 맞춘다.
 export function snapTarget(mol, moving, anchor) {
@@ -70,15 +104,26 @@ export function snapTarget(mol, moving, anchor) {
   return add(a, scale(unit(sub(mol.atoms[moving].pos, a)), check.targetLength));
 }
 
+// 이상각은 UFF theta0 — 그 원자 타입의 실측 평형 결합각이다.
+// 예전엔 IDEAL_ANGLES[배위수]를 썼는데, 원자를 배치하는 openSlots는 ELECTRON_DOMAINS
+// (결합 + 비공유 전자쌍) 기준이라 두 기준이 비공유쌍 있는 원소에서 정면으로 어긋났다:
+// 문헌값(104.51°)으로 완벽히 최적화된 물이 IDEAL_ANGLES[2]=180° 기준으로 "편차 75° danger"가
+// 됐고, 암모니아도 마찬가지였다. 화면의 빨간 경고가 거의 전부 이 오탐이었다.
+// theta0는 UFF가 실제로 최소화하는 목표값이기도 해서, 이제 "VSEPR 만족"과 "최적화 수렴"이
+// 같은 뜻이 된다(물 104.51 · 암모니아 106.70 · 메탄 109.47 · 에틸렌 120 · SF6 90).
+// IDEAL_ANGLES는 그대로 둔다 — 새 원자를 어느 방향에 붙일지(openSlots)는 여전히 그 표가 맞다.
 export function vseprCheck(mol, centerIdx, toleranceDeg = ANGLE_TOLERANCE_DEG) {
   const nb = neighbors(mol, centerIdx);
-  const ideals = IDEAL_ANGLES[nb.length];
+  let theta0 = null;
+  try { theta0 = UFF_PARAMS[typeAtom(mol, centerIdx)].theta0; }
+  catch { /* 미지원 원소 — 판정하지 않는다 */ }
+
   const angles = [];
   for (let a = 0; a < nb.length; a++) {
     for (let b = a + 1; b < nb.length; b++) {
       const actual = angleDeg(mol.atoms[nb[a]].pos, mol.atoms[centerIdx].pos, mol.atoms[nb[b]].pos);
-      // 180° 대향각은 어떤 이상각 집합에서도 허용한다(팔면체/삼각쌍뿔의 축 방향).
-      const candidates = ideals ? [...ideals, 180] : [180];
+      // 180° 대향각은 어떤 형상에서도 허용한다(팔면체/삼각쌍뿔의 축 방향).
+      const candidates = theta0 === null ? [180] : [theta0, 180];
       const best = candidates.reduce((p, c) =>
         Math.abs(actual - c) < Math.abs(actual - p) ? c : p);
       angles.push({ atoms: [nb[a], centerIdx, nb[b]], actual, ideal: best, deviation: Math.abs(actual - best) });
@@ -87,11 +132,31 @@ export function vseprCheck(mol, centerIdx, toleranceDeg = ANGLE_TOLERANCE_DEG) {
   return {
     center: centerIdx,
     coordination: nb.length,
-    ideal: ideals ? ideals[0] : null,
+    ideal: theta0,
     angles,
-    satisfied: ideals !== undefined && angles.length > 0
+    satisfied: theta0 !== null && angles.length > 0
       && angles.every((x) => x.deviation <= toleranceDeg),
   };
+}
+
+// VSEPR 형상 이름. 결합 수만으로 부르면 물이 "직선형"이 된다(결합 2개) — 비공유쌍까지
+// 세는 전자 도메인 수와 함께 봐야 굽은형/삼각뿔형이 제대로 나온다.
+const GEOMETRY_BY_DOMAIN_BONDS = {
+  '2-2': '직선형',
+  '3-3': '평면 삼각형', '3-2': '굽은형',
+  '4-4': '정사면체', '4-3': '삼각뿔형', '4-2': '굽은형',
+  '5-5': '삼각쌍뿔', '6-6': '정팔면체',
+};
+export function geometryName(mol, i) {
+  const el = mol.atoms[i].el;
+  const bonds = neighbors(mol, i).length;
+  // neighbors는 이중·삼중결합도 이웃 원자 하나로만 세므로 이미 "도메인" 단위다(에틸렌
+  // sp2 탄소: 결합 3개 = 도메인 3개). ELECTRON_DOMAINS(=MAX_VALENCE+비공유쌍, 항상 단일결합
+  // 가정)를 그대로 쓰면 이중결합 탄소도 도메인 4로 잘못 나온다. 초원자가(SF6: 결합 6개인데
+  // 정상 배위수는 2)에서만 비공유쌍 계산이 의미를 잃으므로, 그때는 결합 수 자체가 도메인 수다.
+  const normal = MAX_VALENCE[el];
+  const domains = normal !== undefined && bonds > normal ? bonds : bonds + (LONE_PAIRS[el] ?? 0);
+  return GEOMETRY_BY_DOMAIN_BONDS[`${domains}-${bonds}`] ?? `배위 ${bonds}`;
 }
 
 // prev/next는 { [centerIdx]: satisfiedBoolean } 맵.
@@ -200,6 +265,14 @@ export function stability(mol) {
       issues.push({ atom: i, level: 'danger', msg: `${el}${i} 원자가 초과(${used}/${capMax})` });
     } else if (normal !== undefined && used > normal) {
       issues.push({ atom: i, level: 'warn', msg: `${el}${i} 초원자가` });
+    }
+
+    // 원자가 미충족(라디칼). 이중결합을 만들지 못해 결합 1개로 남은 산소처럼, 화학적으로
+    // 존재할 수 없는 상태인데 지금까지 아무 표시가 없었다 — 정작 틀린 원자가 조용하고
+    // 멀쩡한 -OH가 빨갰다. 조립 중에는 부족한 게 정상이므로 danger가 아니라 warn이다.
+    const deficit = implicitH(mol, i);
+    if (deficit > 0) {
+      issues.push({ atom: i, level: 'warn', msg: `${el}${i} 원자가 부족(${deficit})` });
     }
     if (nb.length >= 2) {
       const v = vseprCheck(mol, i);

@@ -1,12 +1,13 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms,
+  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
+  geometryName, bondDistanceOk, cycleBondOrder,
 } from './snap.js';
-import { MAX_VALENCE } from './params.js';
+import { MAX_VALENCE, CPK_COLOR, COVALENT_RADIUS } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
@@ -16,8 +17,8 @@ const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I']
 
 const state = {
   mol: loadPreset('methane'),
-  mode: 'learn',
-  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작. mode(학습/연구)는 패널 노출만 결정한다.
+  colorBy: 'element', // 'element' | 'strain' — 조립 중에는 원소 구분이 우선이라 원소 색이 기본이다
+  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작.
   element: 'C',
   selection: [],
   snapState: {},
@@ -100,6 +101,19 @@ function pickAtom(px, py, thresholdPx = 24) {
   return best;
 }
 
+// 결합 중점을 화면에 투영해 가장 가까운 결합을 찾는다(pickAtom과 같은 좌표 규칙).
+// 임계값을 원자보다 작게 잡아, 원자 근처에서는 원자 클릭이 이기게 한다.
+function pickBond(px, py, thresholdPx = 16) {
+  let best = null, bestD = thresholdPx;
+  for (const b of state.mol.bonds) {
+    const p = state.mol.atoms[b.i].pos, q = state.mol.atoms[b.j].pos;
+    const s = viewer.modelToScreen({ x: (p[0] + q[0]) / 2, y: (p[1] + q[1]) / 2, z: (p[2] + q[2]) / 2 });
+    const d = Math.hypot(s.x - px, s.y - py);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
 // 응력 색상: 낮음(파랑) -> 중간(회백색) -> 높음(빨강).
 // ColorBrewer RdBu 3-스톱 발산 팔레트 — 색맹(적록색맹 포함) 사용자도
 // 밝기·색상 축 둘 다로 구분 가능해 히트맵 표준으로 권장된다.
@@ -114,8 +128,8 @@ export function strainColor(v, vmax) {
 }
 
 let firstRender = true;
-let selectionShapes = []; // render()가 만드는 노란 강조 구 — 이 배열만 지웠다 다시 그린다.
-let warnShapes = [];      // 문제 원자 위의 경고 표식 — 같은 생명주기로 관리한다.
+let selectionShapes = []; // '결합' 도구의 대기 앵커 강조 구 — 이 배열만 지웠다 다시 그린다.
+let overlayLabels = [];   // 선택 순서 배지 + 경고 배지. 셰이프와 수명주기가 달라 따로 관리한다.
 let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
 
 function render() {
@@ -123,30 +137,41 @@ function render() {
   state.lastEnergy = e;
   viewer.removeAllModels();
   // removeAllShapes()는 쓰지 않는다 — 붙이기 고스트까지 함께 지워버리기 때문이다.
-  // 이 함수가 만든 선택 강조 구와 경고 표식만 추적해서 그것만 지운다.
+  // 이 함수가 만든 대기 앵커 강조 구와 오버레이 배지만 추적해서 그것만 지운다.
   for (const s of selectionShapes) viewer.removeShape(s);
   selectionShapes = [];
-  for (const s of warnShapes) viewer.removeShape(s);
-  warnShapes = [];
+  for (const l of overlayLabels) viewer.removeLabel(l);
+  overlayLabels = [];
   viewer.addModel(toXYZ(state.mol), 'xyz');
 
   const vmax = Math.max(0.5, ...e.perAtom); // 0.5 kcal/mol 미만 차이는 노이즈로 본다
   // 원자마다 setStyle을 부르면 3Dmol이 호출마다 전체 원자를 훑어서 O(n²)가 된다 —
   // 원자 수십 개만 돼도 클릭·드래그가 눈에 띄게 끊겼다. 색만 원자별로 다르므로
   // colorfunc 하나로 넘겨 setStyle은 딱 한 번만 부른다(serial = XYZ 모델의 0-based 인덱스).
-  const colors = state.mol.atoms.map((_, i) => strainColor(e.perAtom[i], vmax));
+  // 예전엔 색이 응력 히트맵뿐이고 반지름도 전부 0.30이라 H·C·O가 화면에서 완전히 똑같이
+  // 보였다. 조립 중에는 원소 구분이 우선이므로 CPK 색이 기본이고, 응력 히트맵은 헤더
+  // 셀렉트로 전환한다. 반지름은 이미 있는 공유결합 반지름을 그대로 쓴다(H가 눈에 띄게 작다).
+  const colors = state.mol.atoms.map((a, i) =>
+    (state.colorBy === 'strain' ? strainColor(e.perAtom[i], vmax) : CPK_COLOR[a.el] ?? '#909090'));
+  const radii = state.mol.atoms.map((a) => (COVALENT_RADIUS[a.el] ?? 0.7) * 0.55);
   viewer.setStyle({}, {
-    sphere: { radius: 0.30, colorfunc: (atom) => colors[atom.serial] },
+    sphere: { colorfunc: (atom) => colors[atom.serial], radiusfunc: (atom) => radii[atom.serial] },
     stick: { radius: 0.14, colorfunc: (atom) => colors[atom.serial] },
   });
 
-  // 선택된 원자는 반투명 노란 구로 강조
-  for (const i of state.selection) {
-    selectionShapes.push(viewer.addSphere({
-      center: { x: state.mol.atoms[i].pos[0], y: state.mol.atoms[i].pos[1], z: state.mol.atoms[i].pos[2] },
-      radius: 0.5, color: 'yellow', opacity: 0.35,
+  // 선택 표시는 원자를 덮는 반투명 구가 아니라 원자 위에 뜨는 순서 배지다 — 구는 원소 색과
+  // 모양을 가렸고, 무엇보다 "몇 번째로 고른 원자인지"를 보여주지 못했다(이면각은 순서가
+  // 의미를 갖는다: i-j-k-l).
+  state.selection.forEach((i, order) => {
+    const p = state.mol.atoms[i].pos;
+    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
+    overlayLabels.push(viewer.addLabel(String(order + 1), {
+      position: { x: p[0], y: p[1] + r + 0.30, z: p[2] },
+      backgroundColor: '#eab308', backgroundOpacity: 0.95,
+      fontColor: '#1c1917', fontSize: 12, borderThickness: 0,
+      alignment: 'center', inFront: true,
     }));
-  }
+  });
   // '결합' 도구로 찍어둔 대기 중인 앵커는 하늘색 구로 강조(선택 강조와 같은 패턴, 다른 색).
   if (state.pendingBond !== null) {
     const p = state.mol.atoms[state.pendingBond].pos;
@@ -154,9 +179,9 @@ function render() {
       center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
     }));
   }
-  // 경고를 문제 원자 위에 직접 그린다. 지금까지는 좌상단 텍스트 칩뿐이라, 원자 색이 전부
-  // 응력 색(파랑~빨강)인 3D 화면에서 어느 원자가 문제인지 알 방법이 없었다.
-  // 빨강 와이어프레임 = 심각(원자가 초과 등), 주황 = 경고(VSEPR 편차·초원자가).
+  // 경고도 배지로 낸다. 기호는 HUD 칩과 똑같이 맞춘다(danger ✕ / warn ▲) — 화면 아래위에서
+  // 같은 기호를 쓰면 "이 칩이 저 원자"라는 연결이 설명 없이 읽힌다.
+  // 선택 배지와 겹치지 않게 반대쪽(아래)에 단다.
   const st = stability(state.mol);
   state.lastStability = st;
   const worst = new Map();
@@ -165,11 +190,12 @@ function render() {
   }
   for (const [i, level] of worst) {
     const p = state.mol.atoms[i].pos;
-    warnShapes.push(viewer.addSphere({
-      center: { x: p[0], y: p[1], z: p[2] },
-      radius: level === 'danger' ? 0.52 : 0.46,
-      color: level === 'danger' ? '#dc2626' : '#f59e0b',
-      opacity: 0.85, wireframe: true,
+    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
+    overlayLabels.push(viewer.addLabel(level === 'danger' ? '✕' : '▲', {
+      position: { x: p[0], y: p[1] - r - 0.30, z: p[2] },
+      backgroundColor: level === 'danger' ? '#dc2626' : '#f59e0b', backgroundOpacity: 0.95,
+      fontColor: '#ffffff', fontSize: 12, borderThickness: 0,
+      alignment: 'center', inFront: true,
     }));
   }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
@@ -227,7 +253,7 @@ function updatePanels(e) {
   $('vsepr').innerHTML = rows.length ? `<table>${rows.join('')}</table>` : '—';
 
   // 안정도 HUD: 점수 + 심각한 것 몇 개만. 나머지는 개수로 접고, 어느 원자인지는
-  // 3D 표식(render의 warnShapes)이 직접 가리킨다.
+  // 3D 표식(render의 overlayLabels)이 직접 가리킨다.
   const s2 = hudSummary(state.lastStability ?? stability(state.mol));
   const scoreColor = s2.score >= 80 ? 'var(--success)' : s2.score >= 50 ? 'var(--accent)' : '#dc2626';
   $('stability').innerHTML = `<span style="color:${scoreColor};font-weight:700">${s2.score}</span>`
@@ -244,6 +270,11 @@ function updateDihedralPanel() {
   if (s.length !== 4) {
     slider.disabled = true;
     $('dihedral-info').textContent = '원자 4개를 순서대로 선택하면 활성화됩니다';
+    return;
+  }
+  if (!isTorsionChain(state.mol, s)) {
+    slider.disabled = true;
+    $('dihedral-info').textContent = '이어진 원자 4개(i-j-k-l)를 순서대로 선택하세요';
     return;
   }
   if (branchAtoms(state.mol, s[1], s[2]) === null) {
@@ -327,6 +358,7 @@ const REASON_MSG = {
   'unsupported-element': '지원하지 않는 원소입니다',
   'same-atom': '같은 원자입니다',
   'valence-full': '원자가가 가득 찼습니다 — 더 붙일 수 없습니다',
+  'too-far': '너무 멀리 떨어진 원자입니다 — 가까운 원자끼리 이으세요',
 };
 
 // anchor에 현재 팔레트 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
@@ -359,21 +391,27 @@ function attachAtom(anchor, { pos2d, dir } = {}) {
   if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
   else playClick(880);
 
-  // pos2d로 붙인 경우는 z=0 평면 배치를 그대로 유지한다 — 여기서 바로 최적화하면
-  // 2D 레이아웃이 흐트러진다. 3D 형태로 풀어주는 건 view2d 핸들러가 2D->3D 전환 시 담당한다.
-  if (state.mode === 'learn' && !pos2d) minimize(state.mol, { maxSteps: 120 }); // 붙자마자 자리 잡게
+  // 붙인 원자는 미리보기로 보여준 자리에 그대로 남는다 — openSlots가 이미 정확한 VSEPR
+  // 방향과 UFF 평형 길이로 놓으므로 국소적으로는 이미 최적에 가깝다. 전체 완화가 필요하면
+  // 사용자가 '구조 최적화'를 누른다(예전 학습 모드의 자동 최적화는 붙일 때마다 구조 전체를
+  // 움직여서 "본 자리에 박힌다"는 감각을 깨뜨렸다).
   checkSnaps();
   render();
 }
 
 // 원자 하나를 뗀다(지우개 도구). 원자가 하나뿐이면 남길 것이 없으니 막는다.
+// 원자 하나를 뗀다(지우개 도구·우클릭). 떨어져 나가는 작은 조각은 함께 지운다
+// (model.pruneAtom) — 사슬 중간을 자를 때마다 남은 파편을 하나씩 다시 지우던 불편을 없앤다.
+// 선택 삭제(Del)는 지금처럼 "고른 것만 정확히" 지운다 — 두 동작을 도구로 구분한다.
 function deleteAtom(i) {
   if (state.mol.atoms.length <= 1) { toast('마지막 원자는 삭제할 수 없습니다', 'err'); return; }
   pushUndo();
-  removeAtom(state.mol, i);
-  state.selection = state.selection.filter((s) => s !== i).map((s) => (s > i ? s - 1 : s));
+  const removed = pruneAtom(state.mol, i);
+  if (removed.length === 0) { state.undoStack.pop(); return; }
+  state.selection = [];
   state.snapState = {};
   playClick(220);
+  if (removed.length > 1) toast(`${removed.length}개 원자 제거(가지치기)`);
   checkSnaps();
   render();
 }
@@ -404,10 +442,6 @@ function duplicateSelection() {
   toast('복제됨');
 }
 
-const GEOMETRY_NAME = {
-  2: '직선형', 3: '평면 삼각형', 4: '정사면체', 5: '삼각쌍뿔', 6: '정팔면체',
-};
-
 // 조작 후 VSEPR 만족 상태가 false -> true로 바뀐 중심에만 완성 연출을 낸다.
 // 원소의 정상 원자가(MAX_VALENCE)에 도달한 중심만 평가한다 — 그 전 단계의 중간 배위수는
 // typeAtom이 임시로 sp/sp2(C_1/C_2 등)로 분류해 UFF 이상각과 우연히 일치하며, 메탄을
@@ -422,13 +456,17 @@ function checkSnaps() {
   for (const idx of newSnapEvents(state.snapState, next)) {
     const v = vseprCheck(state.mol, Number(idx));
     playClick(1320); // 성공은 높은 음
-    toast(`${state.mol.atoms[idx].el}${idx}: ${GEOMETRY_NAME[v.coordination]} 완성 (${v.ideal}°)`);
+    toast(`${state.mol.atoms[idx].el}${idx}: ${geometryName(state.mol, Number(idx))} 완성 (${v.ideal}°)`);
   }
   state.snapState = next;
 }
 
 $('scan').onclick = () => {
   if (state.selection.length !== 4) { toast('원자 4개를 순서대로 선택하세요', 'err'); return; }
+  if (!isTorsionChain(state.mol, state.selection)) {
+    toast('이어진 원자 4개(i-j-k-l)를 선택하세요', 'err');
+    return;
+  }
   try {
     drawScan(scanDihedral(state.mol, state.selection, {
       stepDeg: Number($('scan-step').value),
@@ -686,6 +724,25 @@ function handleAtomClick(hit, shiftKey) {
   else { state.selection = [hit]; render(); }
 }
 
+// 결합 도구로 결합선을 클릭하면 차수를 1 -> 2 -> 3 -> 1로 돌린다(원자를 클릭하면
+// 기존대로 두 원자를 잇는다 — 같은 도구 안에서 클릭 대상으로만 갈린다).
+function handleBondOrderClick(bond) {
+  const r = cycleBondOrder(state.mol, bond);
+  if (!r.ok) {
+    toast(REASON_MSG[r.reason] ?? '차수를 바꿀 수 없습니다', 'err');
+    playClick(180);
+    return;
+  }
+  // cycleBondOrder가 이미 제자리에서 바꿔버렸으므로, 되돌리기 스냅샷은 되돌린 뒤에 찍는다.
+  bond.order = r.order === 1 ? 3 : r.order - 1;
+  pushUndo();
+  bond.order = r.order;
+  playClick(660 + r.order * 220);
+  toast(`결합 차수 ${r.order}`);
+  checkSnaps();
+  render();
+}
+
 // '결합' 도구: 첫 클릭은 앵커를 대기시키고, 두 번째 클릭이 그 앵커를 실제로 잇는다
 // (같은 원자를 다시 클릭하면 대기 취소). 기존 원자 두 개를 잇는 유일한 경로 — 이게
 // 있어야 사슬을 고리로 닫을 수 있다(findRings/layout은 이미 임의 고리 위상을 다룬다).
@@ -702,8 +759,18 @@ function handleBondClick(hit) {
     render();
     return;
   }
+  if (!bondDistanceOk(state.mol, anchor, hit)) {
+    toast(REASON_MSG['too-far'], 'err');
+    playClick(180);
+    render();
+    return;
+  }
   pushUndo();
   addBond(state.mol, anchor, hit, 1);
+  // 고리를 닫으면 두 끝이 아직 제 결합 길이가 아니다 — 붙이기와 달리 위치를 새로 정하는
+  // 조작이 아니므로, 여기서만 완화를 돌려 실제 구조로 만든다(붙이기는 "본 자리에 그대로
+  // 박힌다"를 지켜야 하므로 자동 완화하지 않는다).
+  minimize(state.mol, { maxSteps: 200 });
   playClick(880);
   checkSnaps();
   render();
@@ -718,7 +785,13 @@ viewerEl.addEventListener('click', (ev) => {
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
-  if (hit === -1) return;
+  if (hit === -1) {
+    if (state.tool === 'bond') {
+      const b = pickBond(ev.pageX, ev.pageY);
+      if (b) handleBondOrderClick(b);
+    }
+    return;
+  }
   handleAtomClick(hit, ev.shiftKey);
 });
 
@@ -802,7 +875,15 @@ sketch2dEl.addEventListener('pointerleave', () => {
 sketch2dEl.addEventListener('click', (ev) => {
   if (!state.flat) return;
   const hit = ev.target.closest('[data-atom]');
-  if (!hit) return;
+  if (!hit) {
+    const bh = ev.target.closest('[data-bond]');
+    if (bh && state.tool === 'bond') {
+      const [i, j] = bh.dataset.bond.split('-').map(Number);
+      const bond = state.mol.bonds.find((b) => b.i === i && b.j === j);
+      if (bond) handleBondOrderClick(bond);
+    }
+    return;
+  }
   const idx = Number(hit.dataset.atom);
   if (state.tool === 'place') {
     if (!ghost2d) return;
@@ -856,13 +937,13 @@ $('view2d').onclick = () => {
   render();
 };
 
-$('mode').onchange = (ev) => {
-  state.mode = ev.target.value;
-  document.body.dataset.mode = state.mode;
+$('colorby').onchange = (ev) => {
+  state.colorBy = ev.target.value;
+  document.body.dataset.colorby = state.colorBy;
   render();
 };
+document.body.dataset.colorby = state.colorBy;
 
-document.body.dataset.mode = state.mode;
 setTool('select');
 
 $('preset').innerHTML = Object.entries(PRESETS)

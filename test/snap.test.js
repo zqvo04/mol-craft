@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
+import { createMolecule, addAtom, addBond, neighbors, measure } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens, hudSummary,
+  implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -247,4 +247,117 @@ test('hudSummary: 이슈가 적으면 more는 0이다', () => {
   const s = hudSummary({ score: 100, issues: [] }, 3);
   assert.equal(s.shown.length, 0);
   assert.equal(s.more, 0);
+});
+
+test('vseprCheck: 최적화된 물·암모니아는 만족한다 (오탐 회귀)', () => {
+  const w = loadPreset('water');
+  minimize(w);
+  const vw = vseprCheck(w, 0);
+  assert.equal(vw.ideal, 104.51, '물의 이상각은 O_3의 UFF 평형각이어야 한다');
+  assert.equal(vw.satisfied, true, '문헌값으로 최적화된 물이 불만족이면 오탐이다');
+
+  const a = loadPreset('ammonia');
+  minimize(a);
+  const va = vseprCheck(a, 0);
+  assert.equal(va.ideal, 106.7);
+  assert.equal(va.satisfied, true);
+});
+
+test('stability: 최적화된 프리셋에 각도 경고가 없다 (오탐 회귀)', () => {
+  for (const key of ['water', 'ammonia', 'ethylene', 'ethane', 'cyclohexane_chair']) {
+    const m = loadPreset(key);
+    minimize(m);
+    const angleIssues = stability(m).issues.filter((x) => x.msg.includes('각도 편차'));
+    assert.deepEqual(angleIssues, [], `${key}에 각도 오탐이 남아 있다`);
+  }
+});
+
+test('geometryName: 전자 도메인과 결합 수로 형상을 부른다', () => {
+  const w = loadPreset('water');
+  assert.equal(geometryName(w, 0), '굽은형');       // 도메인 4, 결합 2
+  const a = loadPreset('ammonia');
+  assert.equal(geometryName(a, 0), '삼각뿔형');     // 도메인 4, 결합 3
+  const m = loadPreset('methane');
+  assert.equal(geometryName(m, 0), '정사면체');     // 도메인 4, 결합 4
+  const e = loadPreset('ethylene');
+  assert.equal(geometryName(e, 0), '평면 삼각형');  // 결합 3, sp2
+  const s = loadPreset('sf6');
+  assert.equal(geometryName(s, 0), '정팔면체');     // 결합 6
+});
+
+test('stability: 원자가가 모자란 원자를 경고한다 (라디칼 회귀)', () => {
+  // CH3-C(-O)(-OH)H 처럼, 이중결합을 못 만들어 결합 1개로 남은 산소.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'O', [1.4, 0, 0]);
+  addBond(m, 0, 1, 1);
+  const issues = stability(m).issues;
+  assert.ok(issues.some((x) => x.atom === 1 && x.msg.includes('원자가 부족')),
+    '결합 1개짜리 산소는 원자가가 1 모자라므로 경고해야 한다');
+  assert.equal(issues.find((x) => x.atom === 1 && x.msg.includes('원자가 부족')).level, 'warn');
+});
+
+test('stability: 원자가가 꽉 찬 분자에는 부족 경고가 없다', () => {
+  const m = loadPreset('methane');
+  minimize(m);
+  assert.deepEqual(stability(m).issues.filter((x) => x.msg.includes('원자가 부족')), []);
+  assert.equal(stability(m).score, 100);
+});
+
+test('bondDistanceOk: 결합 길이의 3배를 넘으면 거부한다', () => {
+  const near = createMolecule();
+  addAtom(near, 'C', [0, 0, 0]);
+  addAtom(near, 'C', [1.6, 0, 0]);
+  assert.equal(bondDistanceOk(near, 0, 1), true);
+
+  const ring = createMolecule();
+  addAtom(ring, 'C', [0, 0, 0]);
+  addAtom(ring, 'C', [3.8, 0, 0]);   // 갓 그린 사슬의 양 끝 정도 — 고리 닫기는 허용해야 한다
+  assert.equal(bondDistanceOk(ring, 0, 1), true);
+
+  const far = createMolecule();
+  addAtom(far, 'C', [0, 0, 0]);
+  addAtom(far, 'C', [10, 0, 0]);     // 진단에서 25,189 kcal/mol이 나온 거리
+  assert.equal(bondDistanceOk(far, 0, 1), false);
+});
+
+test('bondDistanceOk: 애초에 결합 불가한 쌍은 거리와 무관하게 false', () => {
+  const m = loadPreset('methane');
+  assert.equal(bondDistanceOk(m, 0, 1), false); // 이미 결합됨
+});
+
+test('cycleBondOrder: 1 -> 2 -> 3 -> 1로 순환한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1.5, 0, 0]);
+  addBond(m, 0, 1, 1);
+  const b = m.bonds[0];
+  assert.equal(cycleBondOrder(m, b).order, 2);
+  assert.equal(cycleBondOrder(m, b).order, 3);
+  assert.equal(cycleBondOrder(m, b).order, 1);
+});
+
+test('cycleBondOrder: 원자가가 모자라면 올리지 않고 거부한다', () => {
+  // 메탄의 C-H: 탄소는 이미 결합 4개, 수소는 상한 1이라 이중결합이 불가능하다.
+  const m = loadPreset('methane');
+  const b = m.bonds[0];
+  const r = cycleBondOrder(m, b);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'valence-full');
+  assert.equal(b.order, 1, '거부했으면 차수를 바꾸면 안 된다');
+});
+
+test('cycleBondOrder: 아세트산을 실제로 만들 수 있다 (C2H4O2 회귀)', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);        // 0 메틸 C
+  addAtom(m, 'C', [1.5, 0, 0]);      // 1 카복실 C
+  addAtom(m, 'O', [2.1, 1.1, 0]);    // 2 카보닐 O
+  addAtom(m, 'O', [2.1, -1.1, 0]);   // 3 하이드록실 O
+  addBond(m, 0, 1, 1); addBond(m, 1, 2, 1); addBond(m, 1, 3, 1);
+  assert.equal(cycleBondOrder(m, m.bonds[1]).order, 2); // C1=O2로 올린다
+  syncHydrogens(m);
+  assert.equal(formula(m), 'C2H4O2');
+  minimize(m);
+  assert.ok(Math.abs(measure(m, [1, 2]) - 1.21) < 0.06, `C=O 길이 ${measure(m, [1, 2])}`);
+  assert.ok(Math.abs(measure(m, [1, 3]) - 1.36) < 0.06, `C-O 길이 ${measure(m, [1, 3])}`);
 });

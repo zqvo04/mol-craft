@@ -254,3 +254,10 @@ test('renderSVG: 2D 좌표가 없는 수소를 선택해도 터지지 않는다'
   const svg = renderSVG(m, { selection: [2] }); // 원자 2는 H — layout()이 배치하지 않는다
   assert.ok(!svg.includes('data-sel'));
 });
+
+test('renderSVG: 결합마다 data-bond 히트타깃을 낸다', () => {
+  const m = loadPreset('ethane');
+  const svg = renderSVG(m);
+  // 에탄의 무거운 원자 결합은 C-C 하나뿐이다(C-H는 골격식에 안 그린다).
+  assert.equal((svg.match(/data-bond="0-1"/g) ?? []).length, 1);
+});
