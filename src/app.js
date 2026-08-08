@@ -5,6 +5,7 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
+  geometryName,
 } from './snap.js';
 import { MAX_VALENCE } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -404,10 +405,6 @@ function duplicateSelection() {
   toast('복제됨');
 }
 
-const GEOMETRY_NAME = {
-  2: '직선형', 3: '평면 삼각형', 4: '정사면체', 5: '삼각쌍뿔', 6: '정팔면체',
-};
-
 // 조작 후 VSEPR 만족 상태가 false -> true로 바뀐 중심에만 완성 연출을 낸다.
 // 원소의 정상 원자가(MAX_VALENCE)에 도달한 중심만 평가한다 — 그 전 단계의 중간 배위수는
 // typeAtom이 임시로 sp/sp2(C_1/C_2 등)로 분류해 UFF 이상각과 우연히 일치하며, 메탄을
@@ -422,7 +419,7 @@ function checkSnaps() {
   for (const idx of newSnapEvents(state.snapState, next)) {
     const v = vseprCheck(state.mol, Number(idx));
     playClick(1320); // 성공은 높은 음
-    toast(`${state.mol.atoms[idx].el}${idx}: ${GEOMETRY_NAME[v.coordination]} 완성 (${v.ideal}°)`);
+    toast(`${state.mol.atoms[idx].el}${idx}: ${geometryName(state.mol, Number(idx))} 완성 (${v.ideal}°)`);
   }
   state.snapState = next;
 }

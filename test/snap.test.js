@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors } from '../src/model.js';
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
-  implicitH, formula, syncHydrogens, hudSummary,
+  implicitH, formula, syncHydrogens, hudSummary, geometryName,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -247,4 +247,40 @@ test('hudSummary: 이슈가 적으면 more는 0이다', () => {
   const s = hudSummary({ score: 100, issues: [] }, 3);
   assert.equal(s.shown.length, 0);
   assert.equal(s.more, 0);
+});
+
+test('vseprCheck: 최적화된 물·암모니아는 만족한다 (오탐 회귀)', () => {
+  const w = loadPreset('water');
+  minimize(w);
+  const vw = vseprCheck(w, 0);
+  assert.equal(vw.ideal, 104.51, '물의 이상각은 O_3의 UFF 평형각이어야 한다');
+  assert.equal(vw.satisfied, true, '문헌값으로 최적화된 물이 불만족이면 오탐이다');
+
+  const a = loadPreset('ammonia');
+  minimize(a);
+  const va = vseprCheck(a, 0);
+  assert.equal(va.ideal, 106.7);
+  assert.equal(va.satisfied, true);
+});
+
+test('stability: 최적화된 프리셋에 각도 경고가 없다 (오탐 회귀)', () => {
+  for (const key of ['water', 'ammonia', 'ethylene', 'ethane', 'cyclohexane_chair']) {
+    const m = loadPreset(key);
+    minimize(m);
+    const angleIssues = stability(m).issues.filter((x) => x.msg.includes('각도 편차'));
+    assert.deepEqual(angleIssues, [], `${key}에 각도 오탐이 남아 있다`);
+  }
+});
+
+test('geometryName: 전자 도메인과 결합 수로 형상을 부른다', () => {
+  const w = loadPreset('water');
+  assert.equal(geometryName(w, 0), '굽은형');       // 도메인 4, 결합 2
+  const a = loadPreset('ammonia');
+  assert.equal(geometryName(a, 0), '삼각뿔형');     // 도메인 4, 결합 3
+  const m = loadPreset('methane');
+  assert.equal(geometryName(m, 0), '정사면체');     // 도메인 4, 결합 4
+  const e = loadPreset('ethylene');
+  assert.equal(geometryName(e, 0), '평면 삼각형');  // 결합 3, sp2
+  const s = loadPreset('sf6');
+  assert.equal(geometryName(s, 0), '정팔면체');     // 결합 6
 });
