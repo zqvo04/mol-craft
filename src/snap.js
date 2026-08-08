@@ -30,6 +30,24 @@ export const ELECTRON_DOMAINS = Object.fromEntries(
   Object.keys(LONE_PAIRS).map((el) => [el, (MAX_VALENCE[el] ?? 0) + LONE_PAIRS[el]]),
 );
 
+// 이 원자가 목표로 삼아야 할 전자 도메인 수. ELECTRON_DOMAINS 상수는 결합 차수를 모르는
+// 고정값이라, 결합 차수 편집이 생긴 뒤로는 그대로 쓸 수 없다 — π 결합은 시그마 자리를
+// 차지하지 않는데도 상수는 늘 4를 돌려줘서, 이중결합 탄소에 원자를 붙이면 120°가 아니라
+// 109.47°로 붙었다. 그러면 붙이자마자 vseprCheck(theta0=120° 기준)가 빨간 경고를 냈다.
+//   π 결합 수  = 결합차수 합 - 이웃 수
+//   시그마 자리 = 최대 원자가 - π 결합 수
+//   도메인     = 시그마 자리 + 비공유 전자쌍
+// 검산: C=C -> 3(120°) · C≡C -> 2(180°) · 카보닐 O -> 3(120°, O_2 theta0와 일치)
+//       물 O -> 4(109.47°, 종전과 같음) · 메탄 C -> 4(종전과 같음)
+export function electronDomains(mol, i) {
+  const el = mol.atoms[i].el;
+  const nb = neighbors(mol, i).length;
+  const max = MAX_VALENCE[el];
+  if (max === undefined) return nb + 1;
+  const piBonds = bondOrderSum(mol, i) - nb;
+  return Math.max(1, max - piBonds + (LONE_PAIRS[el] ?? 0));
+}
+
 // 원자가 상한을 넘는 결합은 차단한다. 상한은 EXPANDED_VALENCE(있으면) 또는 MAX_VALENCE다 —
 // 그래서 SF6·PCl5 같은 실재하는 초원자가 분자는 여전히 만들 수 있고, H 사슬이나 CH5처럼
 // 어떤 조건에서도 존재할 수 없는 결합만 막힌다.
@@ -232,7 +250,7 @@ function nextIdealDir(dirs, ideal) {
 export function openSlots(mol, anchor) {
   const a = mol.atoms[anchor].pos;
   const dirs = neighbors(mol, anchor).map((n) => unit(sub(mol.atoms[n].pos, a)));
-  const total = ELECTRON_DOMAINS[mol.atoms[anchor].el] ?? dirs.length + 1;
+  const total = electronDomains(mol, anchor);
   const ideal = IDEAL_ANGLES[total]?.[0];
   const slots = [];
   const want = Math.max(total, dirs.length + 1);

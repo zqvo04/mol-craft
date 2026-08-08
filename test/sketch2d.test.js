@@ -135,10 +135,11 @@ test('renderSVG: 원자가 초과 원자는 붉은 경고 표식', () => {
   assert.ok(renderSVG(m).includes('#dc2626'));
 });
 
-test('renderSVG: 단원자 분자는 빈 캔버스 대신 분자식 텍스트로 대신한다(메탄 -> CH4)', () => {
+test('renderSVG: 무거운 원자 1개인 메탄은 중심 + 명시적 H 구조식을 그린다', () => {
   const svg = renderSVG(loadPreset('methane'));
-  assert.ok(svg.includes('>CH4<'));
-  assert.equal((svg.match(/<line/g) || []).length, 0);
+  assert.ok(svg.includes('>C<'));
+  assert.equal((svg.match(/>H</g) ?? []).length, 4);
+  assert.equal((svg.match(/<line/g) || []).length, 4);
 });
 
 // ---- 4단계(2D 레고 조립): nextChainDir/renderSVG 히트타깃·고스트 --------------------
@@ -260,4 +261,27 @@ test('renderSVG: 결합마다 data-bond 히트타깃을 낸다', () => {
   const svg = renderSVG(m);
   // 에탄의 무거운 원자 결합은 C-C 하나뿐이다(C-H는 골격식에 안 그린다).
   assert.equal((svg.match(/data-bond="0-1"/g) ?? []).length, 1);
+});
+
+test('renderSVG: 무거운 원자가 1개면 중심 + 명시적 H 구조식을 그린다', () => {
+  const m = loadPreset('ammonia');
+  const svg = renderSVG(m);
+  assert.ok(svg.includes('>N<'), '중심 원소 기호가 있어야 한다');
+  assert.equal((svg.match(/>H</g) ?? []).length, 3, 'H 3개가 각각 그려져야 한다');
+  assert.equal((svg.match(/<line/g) ?? []).length, 3, 'N-H 결합선 3개');
+  // 중심 1개 + H 3개 전부 클릭 가능해야 도구가 동작한다.
+  assert.equal((svg.match(/data-atom=/g) ?? []).length, 4);
+});
+
+test('renderSVG: 물도 같은 방식으로 그린다', () => {
+  const svg = renderSVG(loadPreset('water'));
+  assert.ok(svg.includes('>O<'));
+  assert.equal((svg.match(/>H</g) ?? []).length, 2);
+  assert.equal((svg.match(/<line/g) ?? []).length, 2);
+});
+
+test('renderSVG: 무거운 원자가 2개 이상이면 종전 골격식 그대로다 (회귀 방지)', () => {
+  const svg = renderSVG(loadPreset('ethane'));
+  assert.ok(!svg.includes('>H<'), '골격식은 탄소의 H를 그리지 않는다');
+  assert.equal((svg.match(/<line/g) ?? []).length, 1);
 });

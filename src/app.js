@@ -1,13 +1,13 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
-import { energy, minimize, scanDihedral, typeAtom, cachedTerms } from './uff.js';
+import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
   geometryName, bondDistanceOk, cycleBondOrder,
 } from './snap.js';
-import { MAX_VALENCE, CPK_COLOR, COVALENT_RADIUS } from './params.js';
+import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
 import { add, scale } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
@@ -114,6 +114,10 @@ function pickBond(px, py, thresholdPx = 16) {
   return best;
 }
 
+// 볼-스틱 모형의 구 반지름(Å). 가장 짧은 결합(O-H 0.96 Å)에서도 구 두 개가 막대를
+// 완전히 덮지 않도록 잡은 값이다 — 0.30 × 2 = 0.60 < 0.96.
+const ATOM_RADIUS = 0.30;
+
 // 응력 색상: 낮음(파랑) -> 중간(회백색) -> 높음(빨강).
 // ColorBrewer RdBu 3-스톱 발산 팔레트 — 색맹(적록색맹 포함) 사용자도
 // 밝기·색상 축 둘 다로 구분 가능해 히트맵 표준으로 권장된다.
@@ -153,9 +157,13 @@ function render() {
   // 셀렉트로 전환한다. 반지름은 이미 있는 공유결합 반지름을 그대로 쓴다(H가 눈에 띄게 작다).
   const colors = state.mol.atoms.map((a, i) =>
     (state.colorBy === 'strain' ? strainColor(e.perAtom[i], vmax) : CPK_COLOR[a.el] ?? '#909090'));
-  const radii = state.mol.atoms.map((a) => (COVALENT_RADIUS[a.el] ?? 0.7) * 0.55);
+  // 반지름은 원소와 무관한 고정값이다. 3Dmol의 sphere 스타일에는 원자별 반지름을 넘길
+  // 방법이 없고(radiusfunc 같은 속성은 존재하지 않는다 — 예전에 그걸 넘겼다가 조용히
+  // 무시당했고, radius가 없으면 반데르발스 반지름으로 떨어져 구가 결합 막대를 통째로
+  // 삼킨 공간채움 모형이 됐다), 원자별로 setStyle을 나눠 부르면 O(n²)로 되돌아간다.
+  // 원소 구분은 CPK 색이 맡고, 여기서는 결합이 보이는 볼-스틱 비율만 지킨다.
   viewer.setStyle({}, {
-    sphere: { colorfunc: (atom) => colors[atom.serial], radiusfunc: (atom) => radii[atom.serial] },
+    sphere: { radius: ATOM_RADIUS, colorfunc: (atom) => colors[atom.serial] },
     stick: { radius: 0.14, colorfunc: (atom) => colors[atom.serial] },
   });
 
@@ -164,9 +172,8 @@ function render() {
   // 의미를 갖는다: i-j-k-l).
   state.selection.forEach((i, order) => {
     const p = state.mol.atoms[i].pos;
-    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
     overlayLabels.push(viewer.addLabel(String(order + 1), {
-      position: { x: p[0], y: p[1] + r + 0.30, z: p[2] },
+      position: { x: p[0], y: p[1] + ATOM_RADIUS + 0.30, z: p[2] },
       backgroundColor: '#eab308', backgroundOpacity: 0.95,
       fontColor: '#1c1917', fontSize: 12, borderThickness: 0,
       alignment: 'center', inFront: true,
@@ -179,23 +186,23 @@ function render() {
       center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
     }));
   }
-  // 경고도 배지로 낸다. 기호는 HUD 칩과 똑같이 맞춘다(danger ✕ / warn ▲) — 화면 아래위에서
-  // 같은 기호를 쓰면 "이 칩이 저 원자"라는 연결이 설명 없이 읽힌다.
-  // 선택 배지와 겹치지 않게 반대쪽(아래)에 단다.
   const st = stability(state.mol);
   state.lastStability = st;
   const worst = new Map();
   for (const x of st.issues) {
     if (worst.get(x.atom) !== 'danger') worst.set(x.atom, x.level);
   }
+  // 경고는 원자를 감싸는 옅은 헤일로로 낸다. 배지(✕/▲)는 분자 위에 글자를 얹어 시선을
+  // 너무 강하게 끌었고, 그 전의 와이어프레임 구는 그물이 원자 모양을 가렸다. 반투명 구를
+  // 원자보다 조금 크게 깔면 "여기가 문제"라는 신호는 남고 형태와 CPK 색은 그대로 보인다.
+  // 어떤 문제인지(원자가 부족/초과·각도 편차)는 좌상단 HUD 칩이 글자로 알려준다.
   for (const [i, level] of worst) {
     const p = state.mol.atoms[i].pos;
-    const r = (COVALENT_RADIUS[state.mol.atoms[i].el] ?? 0.7) * 0.55;
-    overlayLabels.push(viewer.addLabel(level === 'danger' ? '✕' : '▲', {
-      position: { x: p[0], y: p[1] - r - 0.30, z: p[2] },
-      backgroundColor: level === 'danger' ? '#dc2626' : '#f59e0b', backgroundOpacity: 0.95,
-      fontColor: '#ffffff', fontSize: 12, borderThickness: 0,
-      alignment: 'center', inFront: true,
+    selectionShapes.push(viewer.addSphere({
+      center: { x: p[0], y: p[1], z: p[2] },
+      radius: ATOM_RADIUS * 2.1,
+      color: level === 'danger' ? '#dc2626' : '#f59e0b',
+      opacity: level === 'danger' ? 0.24 : 0.16,
     }));
   }
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
@@ -288,37 +295,6 @@ function updateDihedralPanel() {
   $('dihedral-info').textContent = `${deg}°`;
 }
 
-// 라이브러리 없이 인라인 SVG 꺾은선. 최소/최대는 색상뿐 아니라 모양(원/다이아몬드)으로도
-// 구분한다(색맹 사용자 대응). 곡선 아래 텍스트 요약이 접근성 폴백 데이터 테이블 역할을 한다.
-function drawScan(points) {
-  const W = 290, H = 160, PAD_L = 30, PAD_B = 22, PAD_T = 12, PAD_R = 8;
-  const ys = points.map((p) => p.relative);
-  const ymax = Math.max(...ys, 0.5);
-  const x = (a) => PAD_L + ((a + 180) / 360) * (W - PAD_L - PAD_R);
-  const y = (v) => H - PAD_B - (v / ymax) * (H - PAD_B - PAD_T);
-  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.angle).toFixed(1)},${y(p.relative).toFixed(1)}`).join('');
-  const min = points.reduce((a, b) => (a.relative < b.relative ? a : b));
-  const max = points.reduce((a, b) => (a.relative > b.relative ? a : b));
-
-  $('chart').innerHTML = `
-  <svg viewBox="0 0 ${W} ${H}" width="100%" role="img"
-       aria-label="이면각에 따른 상대 에너지 곡선. 회전장벽 ${max.relative.toFixed(2)} kcal/mol, 최소 ${min.angle}도, 최대 ${max.angle}도">
-    <line x1="${PAD_L}" y1="${H - PAD_B}" x2="${W - PAD_R}" y2="${H - PAD_B}" style="stroke:var(--border)"/>
-    <line x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${H - PAD_B}" style="stroke:var(--border)"/>
-    <path d="${path}" fill="none" style="stroke:var(--primary)" stroke-width="2"/>
-    <circle cx="${x(min.angle)}" cy="${y(min.relative)}" r="3.5" style="fill:var(--success)"/>
-    <rect x="${x(max.angle) - 3}" y="${y(max.relative) - 3}" width="6" height="6"
-          style="fill:var(--accent)" transform="rotate(45 ${x(max.angle).toFixed(1)} ${y(max.relative).toFixed(1)})"/>
-    <text x="${PAD_L}" y="${H - 8}" font-size="9" style="fill:var(--muted-fg)">-180°</text>
-    <text x="${x(0).toFixed(1)}" y="${H - 8}" font-size="9" text-anchor="middle" style="fill:var(--muted-fg)">0°</text>
-    <text x="${W - PAD_R}" y="${H - 8}" font-size="9" text-anchor="end" style="fill:var(--muted-fg)">180°</text>
-    <text x="2" y="${PAD_T + 6}" font-size="9" style="fill:var(--muted-fg)">${ymax.toFixed(1)}</text>
-    <text x="2" y="${H - PAD_B}" font-size="9" style="fill:var(--muted-fg)">0</text>
-  </svg>
-  <div style="font-size:12px">회전장벽 <b>${max.relative.toFixed(2)}</b> kcal/mol
-  · 최소 ${min.angle}° · 최대 ${max.angle}°</div>`;
-}
-
 function toggleSelect(i) {
   const idx = state.selection.indexOf(i);
   if (idx === -1) state.selection.push(i); else state.selection.splice(idx, 1);
@@ -365,9 +341,7 @@ const REASON_MSG = {
 // 계산한다(레고처럼 정해진 각도에만 물림) — 붙이기 도구의 고스트 미리보기와 정확히 같은
 // 함수를 써서 "보여준 자리 = 실제로 붙는 자리"가 항상 일치하게 한다.
 // 결합이 성립하면 UFF 평형 길이로 스냅시킨다. 실패 시 방금 추가한 원자를 되돌린다.
-// pos2d: 2D 골격식 화면에서 붙일 때 sketch2d.layout()이 계산한 좌표를 [x, y, 0]으로
-// 그대로 써서 z=0 평면에 둔다(4단계). 3D 경로(pos2d 없음)는 기존 그대로다.
-function attachAtom(anchor, { pos2d, dir } = {}) {
+function attachAtom(anchor, { dir } = {}) {
   const el = state.element;
   const a = state.mol.atoms[anchor].pos;
   const placeDir = dir ?? idealDirection(state.mol, anchor);
@@ -385,7 +359,7 @@ function attachAtom(anchor, { pos2d, dir } = {}) {
 
   state.mol.atoms.pop(); // 시험 삽입 되돌리기 — 되돌린 깨끗한 상태를 undo 스냅샷으로 남긴다
   pushUndo();
-  const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(placeDir, check.targetLength));
+  const targetPos = add(a, scale(placeDir, check.targetLength));
   const idx2 = addAtom(state.mol, el, targetPos);
   addBond(state.mol, idx2, anchor, 1);
   if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
@@ -449,9 +423,11 @@ function duplicateSelection() {
 function checkSnaps() {
   const next = {};
   for (let i = 0; i < state.mol.atoms.length; i++) {
-    const n = neighbors(state.mol, i).length;
+    const nb = neighbors(state.mol, i).length;
     const max = MAX_VALENCE[state.mol.atoms[i].el];
-    if (n >= 2 && max !== undefined && n >= max) next[i] = vseprCheck(state.mol, i).satisfied;
+    // 이웃 수가 아니라 결합차수 합으로 "원자가를 다 썼는지"를 본다 — 이웃 수로 세면
+    // 에틸렌 탄소(이웃 3개, 원자가 4)가 영원히 미완성으로 남아 완성 연출이 안 떴다.
+    if (nb >= 2 && max !== undefined && bondOrderSum(state.mol, i) >= max) next[i] = vseprCheck(state.mol, i).satisfied;
   }
   for (const idx of newSnapEvents(state.snapState, next)) {
     const v = vseprCheck(state.mol, Number(idx));
@@ -460,22 +436,6 @@ function checkSnaps() {
   }
   state.snapState = next;
 }
-
-$('scan').onclick = () => {
-  if (state.selection.length !== 4) { toast('원자 4개를 순서대로 선택하세요', 'err'); return; }
-  if (!isTorsionChain(state.mol, state.selection)) {
-    toast('이어진 원자 4개(i-j-k-l)를 선택하세요', 'err');
-    return;
-  }
-  try {
-    drawScan(scanDihedral(state.mol, state.selection, {
-      stepDeg: Number($('scan-step').value),
-      relax: $('scan-relax').checked,
-    }));
-  } catch (err) {
-    toast(err.message, 'err');
-  }
-};
 
 $('dihedral').oninput = (ev) => {
   if (state.selection.length !== 4) return;
@@ -831,14 +791,17 @@ function renderFlat() {
   sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview, selection: state.selection });
 }
 
-// sketch2d.layout()의 nextChainDir로 새 원자의 2D 좌표를 구해 그대로 pos([x,y,0])로 쓴다
-// (attachAtom 주석 참고). 방향 계산 자체는 layout()/고스트 미리보기와 동일 함수를 쓴다.
+// 2D 화면에서 붙일 방향은 골격식 레이아웃이 정하고, 길이는 3D와 똑같이 attachAtom이
+// UFF 평형 길이로 정한다. 예전엔 layout()의 무단위 좌표(BOND_LEN=1)를 3D 절대좌표(Å)로
+// 그대로 넘겨서, 결합 길이가 34% 틀리고 앵커의 실제 3D 위치까지 무시됐다(사이클로헥산에
+// 원자 하나를 붙이면 2.5 Å 떨어진 곳에 생겨 신축 에너지가 333 kcal/mol이 됐고, 3D로
+// 돌아갈 때 최적화가 수렴하지 못했다). layout()은 3D 좌표를 읽지 않으므로 이렇게 바꿔도
+// 2D 그림은 달라지지 않는다.
 function attachAtom2D(anchor) {
   const pos = layout(state.mol);
   if (!pos.has(anchor)) return;
-  const dir = nextChainDir(state.mol, anchor, pos, 1);
-  const p = pos.get(anchor);
-  attachAtom(anchor, { pos2d: [p[0] + dir[0], p[1] + dir[1]] });
+  const d = nextChainDir(state.mol, anchor, pos, 1);
+  attachAtom(anchor, { dir: [d[0], d[1], 0] });
 }
 
 sketch2dEl.addEventListener('pointermove', (ev) => {
@@ -953,6 +916,10 @@ $('preset').onchange = (ev) => {
   state.selection = [];
   state.snapState = {};
   checkSnaps();
+  // 분자가 통째로 바뀌면 화면에 맞춰 다시 잡아준다 — zoomTo는 최초 렌더에서 한 번만
+  // 불리기 때문에, 작은 분자에서 큰 분자로 바꾸면 화면 밖으로 나가도 되돌릴 방법이
+  // 수동 줌뿐이었다.
+  firstRender = true;
   render();
   const note = PRESETS[ev.target.value].note;
   if (note) toast(note);
