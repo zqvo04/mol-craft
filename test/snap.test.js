@@ -17,12 +17,22 @@ test('canBond: 원자가가 남으면 허용', () => {
   assert.ok(Math.abs(r.targetLength - 1.109) < 0.02);
 });
 
-test('canBond: 원자가가 가득 차도 이제 막지 않고 overloaded로 표시한다', () => {
+test('canBond: 원자가가 가득 차면 차단한다 (CH5 방지)', () => {
   const m = loadPreset('methane');
   addAtom(m, 'H', [3, 0, 0]);
   const r = canBond(m, 0, 5);
-  assert.equal(r.ok, true);
-  assert.equal(r.reason, 'ok-overloaded');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'valence-full');
+});
+
+test('canBond: H끼리는 절대 연결되지 않는다 (H 사슬 방지)', () => {
+  const m = createMolecule();
+  addAtom(m, 'H', [0, 0, 0]);
+  addAtom(m, 'H', [0.74, 0, 0]);
+  addBond(m, 0, 1);              // H2 분자: 둘 다 원자가를 다 썼다
+  addAtom(m, 'H', [1.5, 0, 0]);
+  assert.equal(canBond(m, 1, 2).ok, false);
+  assert.equal(canBond(m, 1, 2).reason, 'valence-full');
 });
 
 test('canBond: 이미 결합된 쌍은 거부', () => {

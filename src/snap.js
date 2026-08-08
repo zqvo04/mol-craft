@@ -30,11 +30,11 @@ export const ELECTRON_DOMAINS = Object.fromEntries(
   Object.keys(LONE_PAIRS).map((el) => [el, (MAX_VALENCE[el] ?? 0) + LONE_PAIRS[el]]),
 );
 
-// 원자가 초과도 이제 결합 자체를 막지 않는다 — 조립은 항상 허용하고, 불안정한 결과는
-// stability()가 경고로 알린다("일단 끼울 순 있되 흔들린다는 표시"). 데이터 모델상 의미가
-// 없는 경우(자기 자신, 이미 있는 결합, UFF 파라미터 없는 원소)만 여전히 막는다.
-// reason 등급: 'ok' 정상 / 'ok-expanded' 초원자가(EXPANDED_VALENCE 이내, 예: SF6) /
-// 'ok-overloaded' 그 한계마저 넘김(예: CH5) — 셋 다 ok:true.
+// 원자가 상한을 넘는 결합은 차단한다. 상한은 EXPANDED_VALENCE(있으면) 또는 MAX_VALENCE다 —
+// 그래서 SF6·PCl5 같은 실재하는 초원자가 분자는 여전히 만들 수 있고, H 사슬이나 CH5처럼
+// 어떤 조건에서도 존재할 수 없는 결합만 막힌다.
+// reason 등급: 'ok' 정상 / 'ok-expanded' 초원자가(EXPANDED_VALENCE 이내, 예: SF6) — 둘 다 ok:true.
+// 거부: 'same-atom' / 'already-bonded' / 'unsupported-element' / 'valence-full'.
 export function canBond(mol, i, j) {
   if (i === j) return { ok: false, reason: 'same-atom' };
   if (bondBetween(mol, i, j)) return { ok: false, reason: 'already-bonded' };
@@ -49,8 +49,12 @@ export function canBond(mol, i, j) {
     const normal = MAX_VALENCE[el];
     const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
-    if (used + 1 > capMax) reason = 'ok-overloaded';
-    else if (used + 1 > normal && reason === 'ok') reason = 'ok-expanded';
+    // 상한을 넘는 결합은 실제 화학에서 불가능하다(H가 결합 2개, 탄소가 5개 등) —
+    // 예전엔 "레고처럼 일단 끼울 순 있게" 허용하고 경고만 띄웠는데, 경고가 3D에
+    // 안 보여서 H 사슬 같은 구조가 아무 저항 없이 만들어졌다. 이제는 클릭 자체를 막는다.
+    // 초원자가 확장이 실재하는 원소(P·S·Si·할로젠)는 EXPANDED_VALENCE까지 계속 허용한다.
+    if (used + 1 > capMax) return { ok: false, reason: 'valence-full' };
+    if (used + 1 > normal && reason === 'ok') reason = 'ok-expanded';
   }
   return { ok: true, reason, targetLength: bondLength(ti, tj, 1) };
 }

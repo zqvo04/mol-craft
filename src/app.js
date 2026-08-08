@@ -318,12 +318,13 @@ function playClick(freq = 880) {
   o.stop(audio.currentTime + 0.1);
 }
 
-// 원자가 초과는 이제 canBond가 막지 않으므로(아래 attachAtom 참고) 여기 남은 사유는
-// 데이터 모델상 정말로 의미 없는 경우뿐이다.
+// canBond가 원자가 상한 초과를 직접 차단하므로(snap.js 참고) 여기 남은 사유는
+// 데이터 모델상 불가능한 경우와 원자가 포화뿐이다.
 const REASON_MSG = {
   'already-bonded': '이미 결합되어 있습니다',
   'unsupported-element': '지원하지 않는 원소입니다',
   'same-atom': '같은 원자입니다',
+  'valence-full': '원자가가 가득 찼습니다 — 더 붙일 수 없습니다',
 };
 
 // anchor에 현재 팔레트 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
@@ -353,10 +354,7 @@ function attachAtom(anchor, { pos2d } = {}) {
   const targetPos = pos2d ? [pos2d[0], pos2d[1], 0] : add(a, scale(dir, check.targetLength));
   const idx2 = addAtom(state.mol, el, targetPos);
   addBond(state.mol, idx2, anchor, 1);
-  // 원자가를 넘는 결합은 막지 않는다(레고: 억지로 끼울 순 있되 흔들린다) — 대신 경고하고,
-  // 안정도 HUD의 칩으로 계속 표시된다(snap.stability).
-  if (check.reason === 'ok-overloaded') { playClick(140); toast('불안정: 원자가 초과 — 안정도 HUD 확인', 'err'); }
-  else if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
+  if (check.reason === 'ok-expanded') { playClick(880); toast('초원자가 결합 — UFF 정확도 주의', 'err'); }
   else playClick(880);
 
   // pos2d로 붙인 경우는 z=0 평면 배치를 그대로 유지한다 — 여기서 바로 최적화하면
