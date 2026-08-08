@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -423,9 +423,11 @@ function duplicateSelection() {
 function checkSnaps() {
   const next = {};
   for (let i = 0; i < state.mol.atoms.length; i++) {
-    const n = neighbors(state.mol, i).length;
+    const nb = neighbors(state.mol, i).length;
     const max = MAX_VALENCE[state.mol.atoms[i].el];
-    if (n >= 2 && max !== undefined && n >= max) next[i] = vseprCheck(state.mol, i).satisfied;
+    // 이웃 수가 아니라 결합차수 합으로 "원자가를 다 썼는지"를 본다 — 이웃 수로 세면
+    // 에틸렌 탄소(이웃 3개, 원자가 4)가 영원히 미완성으로 남아 완성 연출이 안 떴다.
+    if (nb >= 2 && max !== undefined && bondOrderSum(state.mol, i) >= max) next[i] = vseprCheck(state.mol, i).satisfied;
   }
   for (const idx of newSnapEvents(state.snapState, next)) {
     const v = vseprCheck(state.mol, Number(idx));
@@ -914,6 +916,10 @@ $('preset').onchange = (ev) => {
   state.selection = [];
   state.snapState = {};
   checkSnaps();
+  // 분자가 통째로 바뀌면 화면에 맞춰 다시 잡아준다 — zoomTo는 최초 렌더에서 한 번만
+  // 불리기 때문에, 작은 분자에서 큰 분자로 바꾸면 화면 밖으로 나가도 되돌릴 방법이
+  // 수동 줌뿐이었다.
+  firstRender = true;
   render();
   const note = PRESETS[ev.target.value].note;
   if (note) toast(note);
