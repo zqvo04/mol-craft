@@ -281,6 +281,50 @@
     outline: 2px solid var(--primary);
     outline-offset: 2px;
   }
+  /* 커스텀 드롭다운 — 열렸을 때 OS 기본 사각 팝업 대신 우리 유리 패널이
+     뜨도록 실제 <select>는 숨은 상태값으로만 쓰고 트리거 버튼 + 목록을
+     새로 그린다(app.js의 enhanceSelect). appearance: base-select는 이
+     글을 쓰는 시점 기준으로 아직 실제 배포 브라우저 대부분에서 동작하지
+     않아(런타임 미지원, CSS.supports만 통과) 신뢰할 수 없었다. */
+  select.dropdown-native { display: none; }
+  .dropdown { position: relative; display: inline-flex; }
+  .dropdown-trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  .dropdown-trigger .chev {
+    width: 10px; height: 10px; flex-shrink: 0;
+    transition: transform .2s ease;
+  }
+  .dropdown-trigger[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  .dropdown-list {
+    list-style: none; margin: 0; padding: 6px;
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 20;
+    min-width: 100%; max-height: 260px; overflow-y: auto;
+    border-radius: 16px;
+    border: 1px solid var(--glass-border);
+    background: var(--glass-bg-strong);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+    box-shadow: var(--shadow-md), var(--glass-highlight);
+  }
+  .dropdown-option {
+    border-radius: 10px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--fg);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .dropdown-option:hover,
+  .dropdown-option:focus-visible {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    outline: none;
+  }
+  .dropdown-option[aria-selected="true"] {
+    background: var(--primary);
+    color: var(--primary-fg);
+  }
   input[type="range"] { accent-color: var(--primary); }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12.5px; }
   td { padding: 3px 0; } td:last-child { text-align: right; }
