@@ -71,6 +71,13 @@ const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
   backgroundColor: getComputedStyle(document.body).backgroundColor,
 });
 
+// 다크모드 토글(비-모듈 인라인 스크립트, index.html)이 테마를 바꾸면 쏘는 이벤트.
+// setStyle의 colorfunc와 달리 배경색은 생성 시 옵션이라 직접 갱신해줘야 한다.
+document.addEventListener('mol-craft-theme-change', () => {
+  viewer.setBackgroundColor(getComputedStyle(document.body).backgroundColor);
+  viewer.render();
+});
+
 // 휠 방향 보정. 3Dmol이 뷰어 요소 자체(target 단계)에 이미 휠 리스너를 붙여놓았으므로
 // 같은 요소에 나중에 리스너를 달아도 순서를 못 이긴다. document에 캡처 단계로 걸면
 // 이벤트가 target에 닿기 전에 먼저 잡혀 3Dmol 기본 동작을 완전히 대체할 수 있다.

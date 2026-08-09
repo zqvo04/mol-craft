@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mol-craft — 무료 분자 조립·응력 분석</title>
+<script>
+  // 첫 페인트 전에 저장된 테마를 적용한다 — body 하단 스크립트까지 기다리면
+  // 시스템은 라이트인데 사용자가 다크를 저장한 경우 한 프레임 라이트로
+  // 그려졌다 다크로 바뀌는 깜빡임(FOUC)이 생긴다.
+  (() => {
+    const saved = localStorage.getItem('mol-craft-theme');
+    if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+  })();
+</script>
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <style>
   :root {
@@ -37,8 +46,12 @@
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Malgun Gothic", Roboto, Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   }
+  /* 다크 토큰. 시스템이 다크인데 사용자가 명시적으로 라이트를 고른 경우는
+     제외하고(:not([data-theme="light"])), 시스템과 무관하게 사용자가 다크를
+     고른 경우는 [data-theme="dark"]로 항상 덮어쓴다 — 토글 버튼이 시스템
+     설정보다 우선한다. */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #05070d;
       --wallpaper:
         radial-gradient(1100px 760px at 12% -8%, rgba(59, 92, 190, 0.55), transparent 62%),
@@ -63,6 +76,32 @@
       --shadow-md: 0 10px 32px rgba(0, 0, 0, 0.6);
     }
   }
+  :root[data-theme="dark"] {
+    --bg: #05070d;
+    --wallpaper:
+      radial-gradient(1100px 760px at 12% -8%, rgba(59, 92, 190, 0.55), transparent 62%),
+      radial-gradient(950px 700px at 88% 6%, rgba(124, 58, 237, 0.45), transparent 58%),
+      radial-gradient(1000px 820px at 46% 112%, rgba(13, 148, 136, 0.4), transparent 62%),
+      linear-gradient(160deg, #05070d 0%, #0a0e1a 45%, #05070d 100%);
+    --surface: #1c1c1e;
+    --panel: #1c1c1e;
+    --fg: #f5f5f7;
+    --muted-fg: #98989d;
+    --border: rgba(255, 255, 255, 0.09);
+    --primary: #2997ff;
+    --primary-fg: #ffffff;
+    --accent: #ff9f0a;
+    --danger: #ff453a;
+    --success: #32d74b;
+    --glass-bg: rgba(28, 28, 30, 0.55);
+    --glass-bg-strong: rgba(28, 28, 30, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.12);
+    --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 10px 32px rgba(0, 0, 0, 0.6);
+  }
+  :root[data-theme] { color-scheme: only light; }
+  :root[data-theme="dark"] { color-scheme: only dark; }
   * { box-sizing: border-box; }
   html { background: var(--bg); }
   body {
@@ -113,6 +152,29 @@
     text-align: right;
     letter-spacing: -0.005em;
   }
+  /* 라이트/다크 전환 — 상단 우측 모서리의 원형 아이콘 버튼. 두 아이콘을
+     겹쳐 두고 opacity+rotate로 크로스페이드한다(레이아웃 흔들림 없이). */
+  #theme-toggle {
+    position: relative;
+    flex-shrink: 0;
+    width: 34px; height: 34px;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--fg);
+  }
+  #theme-toggle svg {
+    position: absolute; inset: 0; margin: auto;
+    width: 18px; height: 18px;
+    transition: opacity .25s ease, transform .35s ease;
+  }
+  #theme-toggle .icon-sun { opacity: 1; transform: rotate(0deg) scale(1); }
+  #theme-toggle .icon-moon { opacity: 0; transform: rotate(-60deg) scale(.6); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) #theme-toggle .icon-sun { opacity: 0; transform: rotate(60deg) scale(.6); }
+    :root:not([data-theme="light"]) #theme-toggle .icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
+  }
+  :root[data-theme="dark"] #theme-toggle .icon-sun { opacity: 0; transform: rotate(60deg) scale(.6); }
+  :root[data-theme="dark"] #theme-toggle .icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
   #viewer {
     position: relative;
     min-height: 0;
@@ -343,6 +405,10 @@
   <button id="share">링크 복사</button>
   <button id="share-short">단축 링크</button>
   <span id="disclaimer">UFF 역장 · 진공 · 정전기항 제외 · 정성 비교용(양자계산 대체 아님)</span>
+  <button id="theme-toggle" title="다크모드 전환" aria-pressed="false">
+    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
+    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a6.8 6.8 0 0 0 10.2 10.2z"/></svg>
+  </button>
 </header>
 <div id="toolbar">
   <div id="tools">
@@ -382,6 +448,29 @@
   <section><h2>VSEPR 상태</h2><div id="vsepr">—</div></section>
   <section id="gallery-section" hidden><h2>공개 갤러리</h2><div id="gallery">불러오는 중…</div></section>
 </aside>
+<script>
+  // 테마 토글. 저장된 선택이 없으면 시스템 설정을 그대로 따르고(root에
+  // data-theme을 안 둠 — CSS의 prefers-color-scheme이 계속 실시간 반영),
+  // 사용자가 한 번 고르면 그 이후로는 시스템이 바뀌어도 선택이 우선한다.
+  (() => {
+    const root = document.documentElement;
+    const btn = document.getElementById('theme-toggle');
+    const systemDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+    const resolved = () => root.dataset.theme || (systemDark() ? 'dark' : 'light');
+    const sync = () => btn.setAttribute('aria-pressed', String(resolved() === 'dark'));
+    btn.addEventListener('click', () => {
+      const next = resolved() === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      localStorage.setItem('mol-craft-theme', next);
+      sync();
+      document.dispatchEvent(new CustomEvent('mol-craft-theme-change'));
+    });
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (!root.dataset.theme) { sync(); document.dispatchEvent(new CustomEvent('mol-craft-theme-change')); }
+    });
+    sync();
+  })();
+</script>
 <script type="module" src="src/app.js"></script>
 </body>
 </html>
