@@ -9,7 +9,7 @@ import {
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
-import { add, scale } from './geom.js';
+import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 
@@ -25,6 +25,8 @@ const state = {
   flat: false,
   ghost: null, // { anchor, slots, slot, pos, ok, reason, el } — slots는 남은 빈 자리 전부
   slot: 0,     // 활성 빈 자리 인덱스. R 키/휠로 순환한다(마인크래프트의 배치 방향 선택에 해당)
+  azimuth: 0,  // 앵커에 이웃이 하나뿐일 때(자리가 사실상 하나) R 키/휠로 돌리는 방위각(도).
+               // 자리가 여러 개면 대신 slot을 순환한다 — 두 조작은 서로 배타적이다.
   pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
   undoStack: [],
 };
@@ -86,6 +88,12 @@ document.addEventListener('wheel', (ev) => {
   ev.preventDefault();
   ev.stopPropagation();
   // 붙이기로 원자를 조준 중이면 휠은 확대가 아니라 "붙일 자리 바꾸기"다(마인크래프트 핫바 감각).
+  // 앵커의 이웃이 하나뿐이면(-OH의 H처럼 자리가 사실상 하나) 순환할 다른 자리가 없으므로
+  // 대신 그 자리를 결합축 둘레로 돌린다(방위각).
+  if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
+    rotateAzimuth(ev.deltaY < 0 ? -AZIMUTH_STEP : AZIMUTH_STEP);
+    return;
+  }
   if (state.tool === 'place' && state.ghost && state.ghost.slots.length > 1) {
     cycleSlot(ev.deltaY < 0 ? -1 : 1);
     return;
@@ -579,6 +587,9 @@ const TOOL_HINT = {
 function updateToolHint() {
   let msg = TOOL_HINT[state.tool] ?? '';
   if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
+  if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
+    msg += ` · 방위각 <b>${state.azimuth}°</b>`;
+  }
   if (state.tool === 'bond' && state.pendingBond !== null) {
     const i = state.pendingBond;
     msg = `<b>결합·차수</b> — <b>${state.mol.atoms[i].el}${i}</b> 선택됨. 이을 원자를 클릭하세요 (Esc 취소).`;
@@ -660,6 +671,17 @@ function cycleSlot(step) {
   drawGhost();
 }
 
+const AZIMUTH_STEP = 15; // 도. 자리가 하나뿐인 앵커에서 휠/R 한 칸당 회전량.
+
+function rotateAzimuth(deltaDeg) {
+  if (!state.ghost) return;
+  state.azimuth = (state.azimuth + deltaDeg) % 360;
+  state.ghost = previewAttach(state.ghost.anchor, state.element);
+  blinkOn = true;
+  drawGhost();
+  updateToolHint();
+}
+
 function clearGhost() {
   if (!state.ghost && ghostShapes.length === 0) return;
   state.ghost = null;
@@ -675,7 +697,13 @@ function clearGhost() {
 function previewAttach(anchor, el) {
   const a = state.mol.atoms[anchor].pos;
   const kinds = slotKinds(state.mol, anchor);
-  const slots = kinds.map((k) => k.dir);
+  const anchorNb = neighbors(state.mol, anchor);
+  // 이웃이 하나뿐이면 자리 전체를 그 결합축(anchor->이웃) 둘레로 state.azimuth만큼 돌린다 —
+  // openSlots가 준 자리들은 서로 상대 각도가 고정된 하나의 뼈대라, 축 둘레 회전으로
+  // 통째로 돌려도 자리끼리의 이상각은 그대로 유지된다.
+  const axis = anchorNb.length === 1 ? sub(state.mol.atoms[anchorNb[0]].pos, a) : null;
+  const slots = kinds.map((k) => (axis && state.azimuth
+    ? rotateAround(k.dir, [0, 0, 0], axis, state.azimuth) : k.dir));
   const slot = ((state.slot % slots.length) + slots.length) % slots.length;
   const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
@@ -692,8 +720,8 @@ viewerEl.addEventListener('pointermove', (ev) => {
   if (state.tool !== 'place') return;
   const anchor = pickAtom(ev.pageX, ev.pageY, 40);
   if (anchor === -1) { clearGhost(); return; }
-  // 다른 원자를 조준하면 슬롯 선택을 처음으로 되돌린다 — 앵커마다 자리 개수가 다르다.
-  if (state.ghost?.anchor !== anchor) state.slot = 0;
+  // 다른 원자를 조준하면 슬롯 선택/방위각을 처음으로 되돌린다 — 앵커마다 자리 개수가 다르다.
+  if (state.ghost?.anchor !== anchor) { state.slot = 0; state.azimuth = 0; }
   state.ghost = previewAttach(anchor, state.element);
   blinkOn = true;
   drawGhost();
@@ -993,7 +1021,11 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
-  if (ev.key === 'r' || ev.key === 'R') { cycleSlot(1); return; }
+  if (ev.key === 'r' || ev.key === 'R') {
+    if (state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) rotateAzimuth(AZIMUTH_STEP);
+    else cycleSlot(1);
+    return;
+  }
   // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
   if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey) {
     const el = ELEMENTS[Number(ev.key) - 1];
