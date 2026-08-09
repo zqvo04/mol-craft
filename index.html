@@ -188,6 +188,22 @@
     border: 1px dashed var(--primary);
     background: color-mix(in srgb, var(--primary) 15%, transparent);
   }
+  /* 경고 하이라이트. 3D 반투명 구로 만들었더니 3Dmol 조명이 색을 씻어내
+     회백색 얼룩(측정값 rgb(245,246,246))이 됐고, P·S처럼 CPK 색이 주황·노랑인
+     원소에서는 신호와 원소색이 구분되지 않았다. 화면 위에 얹는 CSS 글로우는
+     조명과 무관하고 색을 그대로 유지한다. */
+  #warnlayer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .warnglow {
+    position: absolute;
+    width: 58px; height: 58px;
+    margin: -29px 0 0 -29px;      /* 중심 정렬 — transform은 안 쓴다(매 프레임 갱신이라 left/top이 싸다) */
+    border-radius: 50%;
+    animation: glowpulse 2.2s ease-in-out infinite;
+  }
+  .warnglow.warn   { background: radial-gradient(circle, rgba(245,158,11,.55) 0%, rgba(245,158,11,.18) 45%, transparent 70%); }
+  .warnglow.danger { background: radial-gradient(circle, rgba(220,38,38,.60) 0%, rgba(220,38,38,.20) 45%, transparent 70%); }
+  @keyframes glowpulse { 50% { opacity: .45; } }
+  body[data-flat="true"] #warnlayer { display: none; }
 </style>
 </head>
 <body>
@@ -224,6 +240,7 @@
   <div id="toast"></div>
   <div id="stability"></div>
   <div id="boxselect"></div>
+  <div id="warnlayer"></div>
   <div id="legend"><span>응력 낮음</span><span class="bar"></span><span>응력 높음</span></div>
   <div id="sketch2d" hidden></div>
 </div>

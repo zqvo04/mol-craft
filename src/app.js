@@ -135,6 +135,8 @@ let firstRender = true;
 let selectionShapes = []; // '결합' 도구의 대기 앵커 강조 구 — 이 배열만 지웠다 다시 그린다.
 let overlayLabels = [];   // 선택 순서 배지 + 경고 배지. 셰이프와 수명주기가 달라 따로 관리한다.
 let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
+let warnAtoms = [];      // [{ i, level }] — 경고 글로우를 띄울 원자. render()가 채운다.
+let warnGlowEls = [];    // 재사용하는 .warnglow div들. 개수가 바뀔 때만 다시 만든다.
 
 function render() {
   const e = energy(state.mol, cachedTerms(state.mol));
@@ -192,19 +194,10 @@ function render() {
   for (const x of st.issues) {
     if (worst.get(x.atom) !== 'danger') worst.set(x.atom, x.level);
   }
-  // 경고는 원자를 감싸는 옅은 헤일로로 낸다. 배지(✕/▲)는 분자 위에 글자를 얹어 시선을
-  // 너무 강하게 끌었고, 그 전의 와이어프레임 구는 그물이 원자 모양을 가렸다. 반투명 구를
-  // 원자보다 조금 크게 깔면 "여기가 문제"라는 신호는 남고 형태와 CPK 색은 그대로 보인다.
-  // 어떤 문제인지(원자가 부족/초과·각도 편차)는 좌상단 HUD 칩이 글자로 알려준다.
-  for (const [i, level] of worst) {
-    const p = state.mol.atoms[i].pos;
-    selectionShapes.push(viewer.addSphere({
-      center: { x: p[0], y: p[1], z: p[2] },
-      radius: ATOM_RADIUS * 2.1,
-      color: level === 'danger' ? '#dc2626' : '#f59e0b',
-      opacity: level === 'danger' ? 0.24 : 0.16,
-    }));
-  }
+  // 경고는 3D 셰이프가 아니라 화면 위 CSS 글로우로 낸다(syncWarnGlows). 반투명 구는
+  // 3Dmol 조명에 색이 씻겨 회백색 얼룩이 됐고, P(#ff8000)·S(#e6c53d)처럼 CPK 색이
+  // 주황·노랑인 원소에서는 신호와 원소색이 아예 구분되지 않았다.
+  warnAtoms = [...worst].map(([i, level]) => ({ i, level }));
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
   updatePanels(e);
@@ -216,8 +209,41 @@ function render() {
       : null;
     $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview, selection: state.selection });
   }
+  syncWarnGlows();
   saveLocal();
 }
+
+// 문제 원자의 3D 좌표를 화면 좌표로 옮겨 글로우 div를 얹는다. modelToScreen은 페이지
+// 좌표(rect+scroll 포함)를 돌려주므로 뷰어 rect와 스크롤을 빼야 한다(pickAtom과 같은 규칙).
+// div 개수가 바뀔 때만 DOM을 다시 만들고, 그 외에는 left/top만 갱신한다.
+function syncWarnGlows() {
+  const layer = $('warnlayer');
+  if (warnGlowEls.length !== warnAtoms.length) {
+    layer.innerHTML = '';
+    warnGlowEls = warnAtoms.map(() => layer.appendChild(document.createElement('div')));
+  }
+  if (warnAtoms.length === 0) return;
+  const rect = viewerEl.getBoundingClientRect();
+  warnAtoms.forEach((w, k) => {
+    const p = state.mol.atoms[w.i]?.pos;
+    const el = warnGlowEls[k];
+    if (!p) { el.style.display = 'none'; return; }
+    const s = viewer.modelToScreen({ x: p[0], y: p[1], z: p[2] });
+    el.className = `warnglow ${w.level}`;
+    el.style.display = 'block';
+    el.style.left = `${s.x - rect.left - window.scrollX}px`;
+    el.style.top = `${s.y - rect.top - window.scrollY}px`;
+  });
+}
+
+// 카메라가 움직여도 글로우가 따라붙어야 하는데 3Dmol에는 카메라 변경 이벤트가 없다.
+// 글로우가 있을 때만 도는 rAF 루프로 매 프레임 위치를 다시 잡는다(div 몇 개짜리 작업이라
+// WebGL 렌더에 비하면 비용이 없다시피 하다).
+function warnGlowLoop() {
+  if (warnAtoms.length) syncWarnGlows();
+  requestAnimationFrame(warnGlowLoop);
+}
+requestAnimationFrame(warnGlowLoop);
 
 const $ = (id) => document.getElementById(id);
 
