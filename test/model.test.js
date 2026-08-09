@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createMolecule, addAtom, addBond, removeAtom, neighbors,
-  bondOrderSum, branchAtoms, measure, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
+  bondOrderSum, branchAtoms, measure, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize,
 } from '../src/model.js';
 import { loadPreset } from '../src/presets.js';
+import { typeAtom, energy } from '../src/uff.js';
 
 // n-부탄 골격만(수소 없음): C0-C1-C2-C3, anti 배좌
 function butaneSkeleton() {
@@ -132,4 +133,36 @@ test('pruneAtom: 원자가 하나뿐이면 아무것도 지우지 않는다', ()
   addAtom(m, 'C', [0, 0, 0]);
   assert.deepEqual(pruneAtom(m, 0), []);
   assert.equal(m.atoms.length, 1);
+});
+
+// 케쿨레 구조로 그린 벤젠: 탄소 6개 고리(결합차수 2/1 번갈아), 탄소마다 H 하나(이웃 3개).
+function kekuleBenzene() {
+  const m = createMolecule();
+  const R = 1.4;
+  const c = [];
+  for (let k = 0; k < 6; k++) {
+    const t = (Math.PI / 3) * k;
+    c.push(addAtom(m, 'C', [R * Math.cos(t), R * Math.sin(t), 0]));
+  }
+  for (let k = 0; k < 6; k++) addBond(m, c[k], c[(k + 1) % 6], k % 2 === 0 ? 2 : 1);
+  for (let k = 0; k < 6; k++) {
+    const t = (Math.PI / 3) * k;
+    addAtom(m, 'H', [2.5 * R * Math.cos(t), 2.5 * R * Math.sin(t), 0]);
+    addBond(m, c[k], 6 + k, 1);
+  }
+  return { m, c };
+}
+
+test('aromatize: 케쿨레 벤젠을 방향족으로 승격한다', () => {
+  const { m, c } = kekuleBenzene();
+  aromatize(m);
+  for (let k = 0; k < 6; k++) {
+    const bond = m.bonds.find((b) =>
+      (b.i === c[k] && b.j === c[(k + 1) % 6]) || (b.i === c[(k + 1) % 6] && b.j === c[k]));
+    assert.equal(bond.order, 1.5, `고리 결합 ${k}`);
+    assert.equal(m.atoms[c[k]].type, 'C_R', `고리 원자 ${k}`);
+    assert.equal(typeAtom(m, c[k]), 'C_R', `typeAtom 오버라이드 ${k}`);
+  }
+  const e = energy(m).total;
+  assert.ok(Number.isFinite(e), 'energy가 유한해야 한다');
 });

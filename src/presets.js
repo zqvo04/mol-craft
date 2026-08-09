@@ -1,4 +1,6 @@
 import { createMolecule, addAtom, addBond } from './model.js';
+import { sub, add, scale, cross, dot, unit, rotateAround } from './geom.js';
+import { typeAtom, bondLength } from './uff.js';
 
 const T = 0.63; // 정사면체 시작 좌표용 상수
 
@@ -109,4 +111,80 @@ export function loadPreset(key) {
   for (const [el, pos] of p.atoms) addAtom(m, el, pos);
   for (const [i, j, order] of p.bonds) addBond(m, i, j, order ?? 1);
   return m;
+}
+
+// ---- 고리 템플릿 ----------------------------------------------------------
+// 국소 좌표계(원점 = 고리 중심, 탄소 0 = +X축 위)에서 미리 계산해둔 정육각형 고리.
+// atom0는 훗날 앵커와 결합할 자리라 수소를 하나만 갖는다(다른 탄소는 정상 개수).
+// 방향족은 결합 order를 1.5·타입을 C_R로 직접 박아 넣는다 — 만들면서 이미 벤젠인 걸
+// 아는 템플릿이라 aromatize(고리 인식)를 따로 돌릴 필요가 없다.
+function hexRing(bondLen, chBond, sp3) {
+  const R = bondLen; // 정육각형: 외접반지름 = 변 길이
+  const atoms = [];
+  const bonds = [];
+  const cType = sp3 ? 'C_3' : 'C_R';
+  for (let k = 0; k < 6; k++) {
+    const t = (k * 60 * Math.PI) / 180;
+    atoms.push(['C', [R * Math.cos(t), R * Math.sin(t), 0], cType]);
+  }
+  for (let k = 0; k < 6; k++) bonds.push([k, (k + 1) % 6, sp3 ? 1 : 1.5]);
+  for (let k = 0; k < 6; k++) {
+    const p = atoms[k][1];
+    const out = unit(p); // 원점이 중심이므로 반지름 방향 = p 방향
+    if (k === 0) {
+      // 앵커와 결합할 자리 — 수소 하나만 고리 평면 밖(+Z)에 둔다.
+      const idx = atoms.push(['H', add(p, [0, 0, chBond])]) - 1;
+      bonds.push([0, idx, 1]);
+    } else if (sp3) {
+      // 정사면체 절반각(~54.7°)만큼 평면 밖 위/아래로 벌어진 H 두 개.
+      const inPlane = scale(out, chBond * 0.577);
+      const idxUp = atoms.push(['H', add(add(p, inPlane), [0, 0, chBond * 0.816])]) - 1;
+      const idxDown = atoms.push(['H', add(add(p, inPlane), [0, 0, -chBond * 0.816])]) - 1;
+      bonds.push([k, idxUp, 1], [k, idxDown, 1]);
+    } else {
+      const idx = atoms.push(['H', add(p, scale(out, chBond))]) - 1;
+      bonds.push([k, idx, 1]);
+    }
+  }
+  return { atoms, bonds, attachType: cType };
+}
+
+export const RING_TEMPLATES = {
+  benzene: { name: '벤젠 고리 (방향족)', ...hexRing(1.40, 1.08, false) },
+  cyclohexane: { name: '사이클로헥산 고리', ...hexRing(1.54, 1.09, true) },
+};
+
+// template의 국소 +X(atom0 바깥 방향)를 slotDir로 정렬하고, atom0가 앵커에서 UFF 평형
+// 결합 길이만큼 떨어지도록 평행이동한 세계 좌표를 계산한다(mol은 읽기만 함 — 앵커 타입을
+// 알아야 결합 길이가 나온다). 고스트 미리보기(app.js)와 실제 삽입(insertRingTemplate)이
+// 이 함수 하나를 공유해 "미리 보여준 자리 = 실제로 붙는 자리"를 보장한다.
+export function computeRingPlacement(mol, anchorIdx, template, slotDir) {
+  const dir = unit(slotDir);
+  const axis = cross([1, 0, 0], dir);
+  const cosT = Math.max(-1, Math.min(1, dot([1, 0, 0], dir)));
+  const angle = (Math.acos(cosT) * 180) / Math.PI;
+  const rotate = (p) => {
+    if (Math.hypot(...axis) > 1e-8) return rotateAround(p, [0, 0, 0], axis, angle);
+    return cosT > 0 ? p : [-p[0], -p[1], p[2]]; // 평행/역평행 — 역평행이면 Z축 180° 회전
+  };
+
+  const anchorPos = mol.atoms[anchorIdx].pos;
+  const bondLen = bondLength(typeAtom(mol, anchorIdx), template.attachType, 1);
+  const atom0World = add(anchorPos, scale(dir, bondLen));
+  const shift = sub(atom0World, rotate(template.atoms[0][1]));
+  return template.atoms.map(([el, pos, type]) => [el, add(rotate(pos), shift), type]);
+}
+
+// 계산된 배치를 실제로 mol에 붙인다. attachAtom처럼 앵커 쪽에는 단일결합 하나만 만든다.
+// 반환값은 새로 추가된 원자 인덱스 배열(template.atoms 순서대로).
+export function insertRingTemplate(mol, anchorIdx, template, slotDir) {
+  const placed = computeRingPlacement(mol, anchorIdx, template, slotDir);
+  const idxMap = placed.map(([el, pos, type]) => {
+    const idx = addAtom(mol, el, pos);
+    if (type) mol.atoms[idx].type = type;
+    return idx;
+  });
+  for (const [i, j, order] of template.bonds) addBond(mol, idxMap[i], idxMap[j], order);
+  addBond(mol, anchorIdx, idxMap[0], 1);
+  return idxMap;
 }

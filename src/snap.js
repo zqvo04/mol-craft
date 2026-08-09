@@ -210,10 +210,10 @@ function sumFallback(dirs) {
 //   이상각이 아니어도(조립 중간 단계) 강건하다.
 // 3개 이상: 대칭 형상에서 -sum이 정확한 다음 방향과 일치한다(정사면체).
 //   전자 도메인 5개 이상(초원자가)은 해석해가 없어 sumFallback으로 넘어간다.
-function nextIdealDir(dirs, ideal) {
+function nextIdealDir(dirs, ideal, ref) {
   if (dirs.length === 1 && ideal !== undefined) {
-    const ref = Math.abs(dirs[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-    const axis = cross(dirs[0], ref);
+    const r = ref ?? (Math.abs(dirs[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]);
+    const axis = cross(dirs[0], r);
     if (norm(axis) > 1e-6) {
       const t = ideal * Math.PI / 180;
       const c = Math.cos(t), s = Math.sin(t);
@@ -249,13 +249,30 @@ function nextIdealDir(dirs, ideal) {
 // idealDirection이 절대 undefined를 뱉지 않게 하기 위한 안전장치다.
 export function openSlots(mol, anchor) {
   const a = mol.atoms[anchor].pos;
-  const dirs = neighbors(mol, anchor).map((n) => unit(sub(mol.atoms[n].pos, a)));
+  const nbIdx = neighbors(mol, anchor);
+  const dirs = nbIdx.map((n) => unit(sub(mol.atoms[n].pos, a)));
   const total = electronDomains(mol, anchor);
   const ideal = IDEAL_ANGLES[total]?.[0];
+  // 이웃이 하나뿐일 때(-OH의 O 등) 그 이웃의 또 다른 이웃(anchor의 2차 이웃)을 기준으로
+  // anti(이면각 180°)에 가까운 자리에서 시작한다 — 분자 자체의 형태를 따르는 시작점이라
+  // 사용자가 방위각을 돌리기 시작할 기준이 임의의 실험실 좌표축([1,0,0])보다 자연스럽다.
+  const ref = dirs.length === 1 ? antiRef(mol, nbIdx[0], anchor, dirs[0]) : undefined;
   const slots = [];
   const want = Math.max(total, dirs.length + 1);
-  while (dirs.length + slots.length < want) slots.push(nextIdealDir([...dirs, ...slots], ideal));
+  while (dirs.length + slots.length < want) slots.push(nextIdealDir([...dirs, ...slots], ideal, ref));
   return slots;
+}
+
+// neighborIdx의(anchor 말고) 다른 이웃 nn에 대해, (nn - neighborIdx) 중 axis(anchor->neighborIdx
+// 방향)에 수직인 성분의 반대 방향. nextIdealDir이 이 ref를 축으로 회전을 시작하면 그 결과의
+// 방위각은 nn과 반대쪽(이면각 180°, anti)이 된다. nn이 없으면(2원자 분자 등) undefined —
+// nextIdealDir이 기존 임의 축([1,0,0]/[0,1,0])으로 폴백한다.
+function antiRef(mol, neighborIdx, anchor, axis) {
+  const nn = neighbors(mol, neighborIdx).find((k) => k !== anchor);
+  if (nn === undefined) return undefined;
+  const w = sub(mol.atoms[nn].pos, mol.atoms[neighborIdx].pos);
+  const wPerp = sub(w, scale(axis, dot(axis, w)));
+  return norm(wPerp) > 1e-6 ? scale(wPerp, -1) : undefined;
 }
 
 // 빈 자리를 "실제로 결합할 수 있는 자리"와 "비공유 전자쌍 자리"로 나눈다.

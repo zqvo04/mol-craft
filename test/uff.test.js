@@ -274,3 +274,19 @@ test('scanDihedral: 이면각이 아닌 4개는 조용히 0을 내지 않고 거
   assert.throws(() => scanDihedral(m, [1, 0, 2, 3], { stepDeg: 60 }),
     /이면각/, '전부 0인 평평한 선을 돌려주면 안 된다');
 });
+
+test('반전 항: 평면 sp2 중심은 ~0, z를 밀어내면 뚜렷이 양수', () => {
+  // 포름알데히드형: C_2가 O(이중결합), H 2개와 xy평면 위에 놓임
+  const planar = build({
+    atoms: [['C', [0, 0, 0]], ['O', [1.2, 0, 0]], ['H', [-0.5, 0.9, 0]], ['H', [-0.5, -0.9, 0]]],
+    bonds: [[0, 1, 2], [0, 2], [0, 3]],
+  });
+  assert.equal(hybridization(typeAtom(planar, 0)), 'sp2');
+  assert.ok(energy(planar).byType.inversion < 0.01, '평면일 때 반전 에너지는 거의 0이어야 함');
+
+  const puckered = build({
+    atoms: [['C', [0, 0, 0]], ['O', [1.2, 0, 0]], ['H', [-0.5, 0.9, 0]], ['H', [-0.5, -0.9, 0.3]]],
+    bonds: [[0, 1, 2], [0, 2], [0, 3]],
+  });
+  assert.ok(energy(puckered).byType.inversion > 0.1, '평면을 벗어나면 반전 에너지가 뚜렷이 커야 함');
+});

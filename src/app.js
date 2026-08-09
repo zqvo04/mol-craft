@@ -1,15 +1,15 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
   geometryName, bondDistanceOk, cycleBondOrder, slotKinds,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
-import { loadPreset, PRESETS } from './presets.js';
-import { add, scale } from './geom.js';
+import { loadPreset, PRESETS, RING_TEMPLATES, computeRingPlacement, insertRingTemplate } from './presets.js';
+import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 
@@ -25,7 +25,11 @@ const state = {
   flat: false,
   ghost: null, // { anchor, slots, slot, pos, ok, reason, el } — slots는 남은 빈 자리 전부
   slot: 0,     // 활성 빈 자리 인덱스. R 키/휠로 순환한다(마인크래프트의 배치 방향 선택에 해당)
+  azimuth: 0,  // 앵커에 이웃이 하나뿐일 때(자리가 사실상 하나) R 키/휠로 돌리는 방위각(도).
+               // 자리가 여러 개면 대신 slot을 순환한다 — 두 조작은 서로 배타적이다.
   pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
+  ringTemplate: 'benzene', // 'ring' 도구가 찍을 고리 종류 — RING_TEMPLATES의 키
+  ringGhost: null, // { anchor, placed, ok } — 'ring' 도구의 고스트 미리보기
   undoStack: [],
 };
 
@@ -86,6 +90,12 @@ document.addEventListener('wheel', (ev) => {
   ev.preventDefault();
   ev.stopPropagation();
   // 붙이기로 원자를 조준 중이면 휠은 확대가 아니라 "붙일 자리 바꾸기"다(마인크래프트 핫바 감각).
+  // 앵커의 이웃이 하나뿐이면(-OH의 H처럼 자리가 사실상 하나) 순환할 다른 자리가 없으므로
+  // 대신 그 자리를 결합축 둘레로 돌린다(방위각).
+  if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
+    rotateAzimuth(ev.deltaY < 0 ? -AZIMUTH_STEP : AZIMUTH_STEP);
+    return;
+  }
   if (state.tool === 'place' && state.ghost && state.ghost.slots.length > 1) {
     cycleSlot(ev.deltaY < 0 ? -1 : 1);
     return;
@@ -557,10 +567,14 @@ const viewerEl = $('viewer');
 function setTool(tool) {
   state.tool = tool;
   clearGhost();
+  clearRingGhost();
   ghost2d = null;
   state.pendingBond = null;
   bondHover2d = null;
-  document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
+  document.querySelectorAll('#tools button').forEach((b) => {
+    const matches = b.dataset.tool === tool && (!b.dataset.ring || b.dataset.ring === state.ringTemplate);
+    b.classList.toggle('active', matches);
+  });
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
   updateToolHint();
 }
@@ -574,11 +588,16 @@ const TOOL_HINT = {
   erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
   bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
   place: '<b>붙이기</b> — 원자를 조준하면 빈 자리가 보입니다. <b>R</b> 키나 휠로 자리를 바꾸고 클릭해 붙입니다. 보라색 자리는 비공유 전자쌍이라 붙일 수 없습니다.',
+  ring: '<b>고리</b> — 원자를 조준하면 6원 고리가 미리 보입니다. 클릭해 붙입니다(원자·결합이 한 번에 생기고 자동으로 살짝 완화됩니다).',
 };
 
 function updateToolHint() {
   let msg = TOOL_HINT[state.tool] ?? '';
   if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
+  if (state.tool === 'ring') msg += ` 현재 고리: <b>${RING_TEMPLATES[state.ringTemplate].name}</b>`;
+  if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
+    msg += ` · 방위각 <b>${state.azimuth}°</b>`;
+  }
   if (state.tool === 'bond' && state.pendingBond !== null) {
     const i = state.pendingBond;
     msg = `<b>결합·차수</b> — <b>${state.mol.atoms[i].el}${i}</b> 선택됨. 이을 원자를 클릭하세요 (Esc 취소).`;
@@ -594,6 +613,8 @@ $('tool-view').onclick = () => setTool('view');
 $('tool-select').onclick = () => setTool('select');
 $('tool-erase').onclick = () => setTool('erase');
 $('tool-bond').onclick = () => setTool('bond');
+$('tool-ring-benzene').onclick = () => { state.ringTemplate = 'benzene'; setTool('ring'); };
+$('tool-ring-cyclohexane').onclick = () => { state.ringTemplate = 'cyclohexane'; setTool('ring'); };
 
 $('palette').innerHTML = ELEMENTS.map((el, k) =>
   `<button data-el="${el}" title="${k < 9 ? `단축키 ${k + 1}` : ''}">${el}</button>`).join('');
@@ -660,6 +681,17 @@ function cycleSlot(step) {
   drawGhost();
 }
 
+const AZIMUTH_STEP = 15; // 도. 자리가 하나뿐인 앵커에서 휠/R 한 칸당 회전량.
+
+function rotateAzimuth(deltaDeg) {
+  if (!state.ghost) return;
+  state.azimuth = (state.azimuth + deltaDeg) % 360;
+  state.ghost = previewAttach(state.ghost.anchor, state.element);
+  blinkOn = true;
+  drawGhost();
+  updateToolHint();
+}
+
 function clearGhost() {
   if (!state.ghost && ghostShapes.length === 0) return;
   state.ghost = null;
@@ -675,7 +707,13 @@ function clearGhost() {
 function previewAttach(anchor, el) {
   const a = state.mol.atoms[anchor].pos;
   const kinds = slotKinds(state.mol, anchor);
-  const slots = kinds.map((k) => k.dir);
+  const anchorNb = neighbors(state.mol, anchor);
+  // 이웃이 하나뿐이면 자리 전체를 그 결합축(anchor->이웃) 둘레로 state.azimuth만큼 돌린다 —
+  // openSlots가 준 자리들은 서로 상대 각도가 고정된 하나의 뼈대라, 축 둘레 회전으로
+  // 통째로 돌려도 자리끼리의 이상각은 그대로 유지된다.
+  const axis = anchorNb.length === 1 ? sub(state.mol.atoms[anchorNb[0]].pos, a) : null;
+  const slots = kinds.map((k) => (axis && state.azimuth
+    ? rotateAround(k.dir, [0, 0, 0], axis, state.azimuth) : k.dir));
   const slot = ((state.slot % slots.length) + slots.length) % slots.length;
   const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
@@ -692,13 +730,78 @@ viewerEl.addEventListener('pointermove', (ev) => {
   if (state.tool !== 'place') return;
   const anchor = pickAtom(ev.pageX, ev.pageY, 40);
   if (anchor === -1) { clearGhost(); return; }
-  // 다른 원자를 조준하면 슬롯 선택을 처음으로 되돌린다 — 앵커마다 자리 개수가 다르다.
-  if (state.ghost?.anchor !== anchor) state.slot = 0;
+  // 다른 원자를 조준하면 슬롯 선택/방위각을 처음으로 되돌린다 — 앵커마다 자리 개수가 다르다.
+  if (state.ghost?.anchor !== anchor) { state.slot = 0; state.azimuth = 0; }
   state.ghost = previewAttach(anchor, state.element);
   blinkOn = true;
   drawGhost();
 });
 viewerEl.addEventListener('pointerleave', () => clearGhost());
+
+// ---- 고리 도구 고스트 미리보기 --------------------------------------------
+// place 도구의 previewAttach/drawGhost/clearGhost와 같은 패턴: computeRingPlacement로
+// 부작용 없이 세계 좌표를 계산하고, canBond로 앵커에 자리가 있는지만 시험 삽입/되돌리기로 본다.
+let ringGhostShapes = [];
+
+function previewRing(anchor) {
+  const template = RING_TEMPLATES[state.ringTemplate];
+  const dir = idealDirection(state.mol, anchor);
+  const placed = computeRingPlacement(state.mol, anchor, template, dir);
+  const idx = addAtom(state.mol, placed[0][0], placed[0][1]);
+  const check = canBond(state.mol, anchor, idx);
+  state.mol.atoms.pop();
+  return { anchor, placed, ok: check.ok, reason: check.reason };
+}
+
+function drawRingGhost() {
+  for (const s of ringGhostShapes) viewer.removeShape(s);
+  ringGhostShapes = [];
+  const g = state.ringGhost;
+  if (!g) return;
+  const color = g.ok ? '#22c55e' : '#dc2626';
+  const anchorPos = state.mol.atoms[g.anchor].pos;
+  const worldPos = g.placed.map(([, pos]) => pos);
+  const toXYZ = (p) => ({ x: p[0], y: p[1], z: p[2] });
+  ringGhostShapes.push(viewer.addLine({ start: toXYZ(anchorPos), end: toXYZ(worldPos[0]), color, dashed: true }));
+  for (const [i, j] of RING_TEMPLATES[state.ringTemplate].bonds) {
+    ringGhostShapes.push(viewer.addLine({ start: toXYZ(worldPos[i]), end: toXYZ(worldPos[j]), color }));
+  }
+  for (const p of worldPos) {
+    ringGhostShapes.push(viewer.addSphere({ center: toXYZ(p), radius: 0.28, color, opacity: 0.5 }));
+  }
+  viewer.render();
+}
+
+function clearRingGhost() {
+  if (!state.ringGhost && ringGhostShapes.length === 0) return;
+  state.ringGhost = null;
+  for (const s of ringGhostShapes) viewer.removeShape(s);
+  ringGhostShapes = [];
+  viewer.render();
+}
+
+// 미리 보여준 배치를 그대로 커밋한다(previewRing과 같은 computeRingPlacement를 쓰는
+// insertRingTemplate). 고리를 닫아 붙인 직후는 handleBondClick과 같은 이유로 짧게 완화한다.
+function attachRing(anchor) {
+  const template = RING_TEMPLATES[state.ringTemplate];
+  const dir = idealDirection(state.mol, anchor);
+  pushUndo();
+  insertRingTemplate(state.mol, anchor, template, dir);
+  minimize(state.mol, { maxSteps: 80 });
+  playClick(880);
+  clearRingGhost();
+  checkSnaps();
+  render();
+}
+
+viewerEl.addEventListener('pointermove', (ev) => {
+  if (state.tool !== 'ring') return;
+  const anchor = pickAtom(ev.pageX, ev.pageY, 40);
+  if (anchor === -1) { clearRingGhost(); return; }
+  state.ringGhost = previewRing(anchor);
+  drawRingGhost();
+});
+viewerEl.addEventListener('pointerleave', () => clearRingGhost());
 
 // ---- 박스 선택 -------------------------------------------------------------
 // 빈 공간에서 드래그 시작 시 캡처 단계에서 3Dmol의 궤도회전을 가로챈다(휠 보정과 같은 트릭).
@@ -768,6 +871,7 @@ function handleBondOrderClick(bond) {
   bond.order = r.order === 1 ? 3 : r.order - 1;
   pushUndo();
   bond.order = r.order;
+  aromatize(state.mol); // 케쿨레 고리가 완성됐으면 C_R/order 1.5로 승격(그 외엔 무동작)
   playClick(660 + r.order * 220);
   toast(`결합 차수 ${r.order}`);
   checkSnaps();
@@ -798,10 +902,11 @@ function handleBondClick(hit) {
   }
   pushUndo();
   addBond(state.mol, anchor, hit, 1);
-  // 고리를 닫으면 두 끝이 아직 제 결합 길이가 아니다 — 붙이기와 달리 위치를 새로 정하는
-  // 조작이 아니므로, 여기서만 완화를 돌려 실제 구조로 만든다(붙이기는 "본 자리에 그대로
-  // 박힌다"를 지켜야 하므로 자동 완화하지 않는다).
-  minimize(state.mol, { maxSteps: 200 });
+  aromatize(state.mol); // 고리를 닫아 케쿨레 구조가 완성됐으면 승격(그 외엔 무동작)
+  // 고리를 닫은 경우(branchAtoms가 null — 고리 결합)만 완화를 돌려 실제 구조로 만든다.
+  // 붙이기는 "본 자리에 그대로 박힌다"를 지켜야 하므로 자동 완화하지 않지만, 고리 닫기는
+  // 두 끝이 아직 제 결합 길이가 아닌 게 정상이라 여기서만 예외로 완화한다.
+  if (branchAtoms(state.mol, anchor, hit) === null) minimize(state.mol, { maxSteps: 80 });
   playClick(880);
   checkSnaps();
   render();
@@ -815,6 +920,12 @@ viewerEl.addEventListener('click', (ev) => {
     else if (state.ghost.kinds[state.ghost.slot] === 'lonepair') {
       toast('비공유 전자쌍 자리입니다 — 원자가 들어갈 수 없습니다', 'err');
     } else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
+    return;
+  }
+  if (state.tool === 'ring') {
+    if (!state.ringGhost) return;
+    if (state.ringGhost.ok) attachRing(state.ringGhost.anchor);
+    else toast(REASON_MSG[state.ringGhost.reason] ?? '고리를 붙일 수 없습니다', 'err');
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
@@ -993,7 +1104,11 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
-  if (ev.key === 'r' || ev.key === 'R') { cycleSlot(1); return; }
+  if (ev.key === 'r' || ev.key === 'R') {
+    if (state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) rotateAzimuth(AZIMUTH_STEP);
+    else cycleSlot(1);
+    return;
+  }
   // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
   if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey) {
     const el = ELEMENTS[Number(ev.key) - 1];

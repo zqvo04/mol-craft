@@ -1,6 +1,8 @@
 import { neighbors, bondOrderSum, bondBetween, setDihedral, isTorsionChain } from './model.js';
 import { UFF_PARAMS } from './params.js';
-import { distance, angleDeg, dihedralDeg } from './geom.js';
+import {
+  distance, angleDeg, dihedralDeg, cross, dot, unit, sub,
+} from './geom.js';
 
 // 원자 타입 결정: 원소 + 최대 결합 차수 + 이웃 수.
 // 혼성은 결합 개수가 아니라 최대 결합 차수가 정한다 — 단일결합만 있으면 sp3, 이중이
@@ -194,6 +196,27 @@ export function buildTerms(mol) {
     }
   }
 
+  // --- 반전(out-of-plane): sp2 중심(이웃 3개)이 평면을 유지하도록 하는 항.
+  // 일반형 단순화(카르보닐 인접 특수 규칙은 생략): E = (K/3)(1 - cos w), w는 i-l 결합과
+  // i,j,k가 이루는 평면 사이의 이면각(Wilson angle). j/k/l 세 갈래 각각을 "밖" 원자로 돌며 3항 합산.
+  for (let i = 0; i < mol.atoms.length; i++) {
+    const nb = neighbors(mol, i);
+    if (nb.length !== 3 || hybridization(types[i]) !== 'sp2') continue;
+    const K = 6.0 / 3;
+    const [a1, a2, a3] = nb;
+    for (const [j, k2, l] of [[a1, a2, a3], [a2, a3, a1], [a3, a1, a2]]) {
+      terms.push({
+        type: 'inversion', atoms: [i, j, k2, l],
+        eval(m) {
+          const pi = m.atoms[i].pos;
+          const normal = unit(cross(sub(m.atoms[j].pos, pi), sub(m.atoms[k2].pos, pi)));
+          const w = Math.asin(Math.max(-1, Math.min(1, dot(unit(sub(m.atoms[l].pos, pi)), normal))));
+          return K * (1 - Math.cos(w));
+        },
+      });
+    }
+  }
+
   // --- vdW (LJ 12-6): E = D [ (x0/r)^12 - 2 (x0/r)^6 ]
   const ex = excludedPairs(mol);
   for (let i = 0; i < mol.atoms.length; i++) {
@@ -235,7 +258,9 @@ export function cachedTerms(mol) {
 }
 
 export function energy(mol, terms = buildTerms(mol)) {
-  const byType = { bond: 0, angle: 0, torsion: 0, vdw: 0 };
+  const byType = {
+    bond: 0, angle: 0, torsion: 0, vdw: 0, inversion: 0,
+  };
   const perAtom = new Array(mol.atoms.length).fill(0);
   const perBond = new Map();
   const detail = [];
@@ -250,7 +275,7 @@ export function energy(mol, terms = buildTerms(mol)) {
     }
     detail.push({ type: t.type, atoms: t.atoms, e });
   }
-  const total = byType.bond + byType.angle + byType.torsion + byType.vdw;
+  const total = byType.bond + byType.angle + byType.torsion + byType.vdw + byType.inversion;
   return { total, byType, perAtom, perBond, terms: detail };
 }
 

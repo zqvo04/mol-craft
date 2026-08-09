@@ -6,7 +6,7 @@ import {
   implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder, electronDomains,
   slotKinds,
 } from '../src/snap.js';
-import { distance, angleDeg, dot } from '../src/geom.js';
+import { distance, angleDeg, dot, dihedralDeg, add } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
 import { minimize } from '../src/uff.js';
 
@@ -214,6 +214,20 @@ test('openSlots: 결정적이다 (같은 분자면 같은 순서·같은 값)', 
 test('openSlots: 물의 산소는 비공유쌍 자리 2개가 남는다', () => {
   const m = loadPreset('water');
   assert.equal(openSlots(m, 0).length, 2); // 전자 도메인 4 - 결합 2
+});
+
+test('openSlots: 이웃 1개짜리 앵커는 분자 자체를 기준으로 anti(이면각 180°) 자리에서 시작한다 (임의 축 회귀)', () => {
+  // C2-C1-O, O는 이웃 1개(C1)뿐 — 에탄올의 -OH에 H를 붙이는 상황과 같다.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);       // 0: C2
+  addAtom(m, 'C', [1.5, 0, 0]);     // 1: C1
+  addAtom(m, 'O', [2.2, 1.3, 0]);   // 2: O
+  addBond(m, 0, 1);
+  addBond(m, 1, 2);
+  const slot = openSlots(m, 2)[0];
+  const newPos = add(m.atoms[2].pos, slot);
+  const dh = dihedralDeg(newPos, m.atoms[2].pos, m.atoms[1].pos, m.atoms[0].pos);
+  assert.ok(Math.abs(Math.abs(dh) - 180) < 3, `이면각(C2-C1-O-신규)이 anti(180°)여야 함: ${dh}`);
 });
 
 test('idealDirection은 openSlots의 첫 원소와 같다 (기존 동작 보존)', () => {
