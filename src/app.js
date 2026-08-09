@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -796,6 +796,7 @@ function handleBondOrderClick(bond) {
   bond.order = r.order === 1 ? 3 : r.order - 1;
   pushUndo();
   bond.order = r.order;
+  aromatize(state.mol); // 케쿨레 고리가 완성됐으면 C_R/order 1.5로 승격(그 외엔 무동작)
   playClick(660 + r.order * 220);
   toast(`결합 차수 ${r.order}`);
   checkSnaps();
@@ -826,6 +827,7 @@ function handleBondClick(hit) {
   }
   pushUndo();
   addBond(state.mol, anchor, hit, 1);
+  aromatize(state.mol); // 고리를 닫아 케쿨레 구조가 완성됐으면 승격(그 외엔 무동작)
   // 고리를 닫으면 두 끝이 아직 제 결합 길이가 아니다 — 붙이기와 달리 위치를 새로 정하는
   // 조작이 아니므로, 여기서만 완화를 돌려 실제 구조로 만든다(붙이기는 "본 자리에 그대로
   // 박힌다"를 지켜야 하므로 자동 완화하지 않는다).

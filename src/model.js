@@ -98,6 +98,88 @@ export function duplicateAtoms(mol, indices) {
 export const neighbors = (mol, i) =>
   mol.bonds.filter((b) => b.i === i || b.j === i).map((b) => (b.i === i ? b.j : b.i));
 
+// u-v 간선을 뺀 상태에서 BFS 최단경로 -> 그 경로 + 간선(u-v)이 u-v를 지나는 최소 고리.
+// ponytail: 진짜 SSSR이 아니다(순환 기저 크기만큼만 찾음). 다리고리(아다만테인류)에서
+// 고리가 과대/중복 계산될 수 있음 — 업그레이드 경로는 정식 SSSR 알고리즘.
+function smallestRingThroughEdge(adj, u, v) {
+  const parent = new Map([[u, null]]);
+  const queue = [u];
+  let qi = 0;
+  while (qi < queue.length) {
+    const cur = queue[qi++];
+    if (cur === v) break;
+    for (const n of adj(cur)) {
+      if (cur === u && n === v) continue; // 직접 간선 제외
+      if (!parent.has(n)) { parent.set(n, cur); queue.push(n); }
+    }
+  }
+  if (!parent.has(v)) return null; // 다리(bridge) — 고리 아님
+  const ring = [];
+  for (let cur = v; cur !== null; cur = parent.get(cur)) ring.push(cur);
+  return ring; // [v, ..., u] 순환: ring[k]-ring[k+1] 결합, ring[last]-ring[0]는 u-v 직접 결합
+}
+
+// 무거운 원자 그래프의 최소 고리 목록. 각 원소(연결 성분)마다 BFS 스패닝트리를 만들고,
+// 트리에 없는 간선(비트리 간선)마다 그 간선을 지나는 최소 고리를 하나씩 뽑는다.
+// sketch2d.js(2D 레이아웃)와 aromatize(방향족 인식)가 공유한다.
+export function findRings(mol) {
+  const heavy = mol.atoms.map((a, i) => i).filter((i) => mol.atoms[i].el !== 'H');
+  const edgeKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const heavyNb = (i) => neighbors(mol, i).filter((n) => mol.atoms[n].el !== 'H');
+  const adjMap = new Map(heavy.map((i) => [i, heavyNb(i)]));
+  const adj = (i) => adjMap.get(i) ?? [];
+  const globalSeen = new Set();
+  const rings = [];
+  for (const root of heavy) {
+    if (globalSeen.has(root)) continue;
+    const parent = new Map([[root, null]]);
+    const treeEdges = new Set();
+    const queue = [root];
+    let qi = 0;
+    while (qi < queue.length) {
+      const u = queue[qi++];
+      for (const v of adj(u)) {
+        if (!parent.has(v)) { parent.set(v, u); treeEdges.add(edgeKey(u, v)); queue.push(v); }
+      }
+    }
+    for (const i of parent.keys()) globalSeen.add(i);
+    for (const u of parent.keys()) {
+      for (const v of adj(u)) {
+        if (v <= u || treeEdges.has(edgeKey(u, v))) continue;
+        const ring = smallestRingThroughEdge(adj, u, v);
+        if (ring) rings.push(ring);
+      }
+    }
+  }
+  const seenKeys = new Set();
+  return rings.filter((r) => {
+    const key = [...r].sort((a, b) => a - b).join(',');
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
+}
+
+// 방향족 인식: 케쿨레 구조(고리 안에서 단일/이중 결합이 번갈아 그려진 상태)를 감지해
+// 고리 원자를 C_R/N_R/O_R로, 고리 결합을 order 1.5로 승격한다. 완전한 휘켈 판정은 하지
+// 않는다 — 5/6원 고리, 전부 C/N/O, 원자마다 이웃 정확히 3개(sp2 가능), 원자마다 이중결합
+// (고리 안이든 밖이든) 하나 이상이라는 케쿨레 흔적만 확인한다.
+export function aromatize(mol) {
+  for (const ring of findRings(mol)) {
+    if (ring.length !== 5 && ring.length !== 6) continue;
+    if (!ring.every((i) => ['C', 'N', 'O'].includes(mol.atoms[i].el))) continue;
+    if (!ring.every((i) => neighbors(mol, i).length === 3)) continue;
+    const hasDoubleBond = (i) => mol.bonds.some((b) => (b.i === i || b.j === i) && b.order === 2);
+    if (!ring.every((i) => hasDoubleBond(i) || mol.atoms[i].type?.endsWith('_R'))) continue;
+
+    for (const i of ring) mol.atoms[i].type = `${mol.atoms[i].el}_R`;
+    for (let k = 0; k < ring.length; k++) {
+      const bond = bondBetween(mol, ring[k], ring[(k + 1) % ring.length]);
+      if (bond) bond.order = 1.5;
+    }
+  }
+}
+
 export const bondOrderSum = (mol, i) =>
   mol.bonds.filter((b) => b.i === i || b.j === i).reduce((s, b) => s + b.order, 0);
 

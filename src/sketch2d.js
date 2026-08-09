@@ -1,5 +1,7 @@
-import { neighbors } from './model.js';
+import { neighbors, findRings } from './model.js';
 import { implicitH, stability, formula } from './snap.js';
+
+export { findRings }; // model.js로 옮겼지만(aromatize와 공유) 기존 호출부·테스트 호환용 재수출.
 
 // 골격식 2D 좌표 생성. 결합 길이 1(무단위 — 렌더러가 원하는 배율로 스케일).
 // 원자 인덱스 -> [x, y] Map을 돌려준다(직렬화 안 함, 로드/편집 때마다 다시 계산).
@@ -20,66 +22,7 @@ const rotate2 = (a, rad) => {
 
 const heavyAtoms = (mol) => mol.atoms.map((a, i) => i).filter((i) => mol.atoms[i].el !== 'H');
 const heavyNeighbors = (mol, i) => neighbors(mol, i).filter((n) => mol.atoms[n].el !== 'H');
-const edgeKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-
-// u-v 간선을 뺀 상태에서 BFS 최단경로 -> 그 경로 + 간선(u-v)이 u-v를 지나는 최소 고리.
-// ponytail: 진짜 SSSR이 아니다(순환 기저 크기만큼만 찾음). 다리고리(아다만테인류)에서
-// 고리가 과대/중복 계산될 수 있음 — 업그레이드 경로는 정식 SSSR 알고리즘.
-function smallestRingThroughEdge(adj, u, v) {
-  const parent = new Map([[u, null]]);
-  const queue = [u];
-  let qi = 0;
-  while (qi < queue.length) {
-    const cur = queue[qi++];
-    if (cur === v) break;
-    for (const n of adj(cur)) {
-      if (cur === u && n === v) continue; // 직접 간선 제외
-      if (!parent.has(n)) { parent.set(n, cur); queue.push(n); }
-    }
-  }
-  if (!parent.has(v)) return null; // 다리(bridge) — 고리 아님
-  const ring = [];
-  for (let cur = v; cur !== null; cur = parent.get(cur)) ring.push(cur);
-  return ring; // [v, ..., u] 순환: ring[k]-ring[k+1] 결합, ring[last]-ring[0]는 u-v 직접 결합
-}
-
-// 무거운 원자 그래프의 최소 고리 목록. 각 원소(연결 성분)마다 BFS 스패닝트리를 만들고,
-// 트리에 없는 간선(비트리 간선)마다 그 간선을 지나는 최소 고리를 하나씩 뽑는다.
-export function findRings(mol) {
-  const heavy = heavyAtoms(mol);
-  const adjMap = new Map(heavy.map((i) => [i, heavyNeighbors(mol, i)]));
-  const adj = (i) => adjMap.get(i) ?? [];
-  const globalSeen = new Set();
-  const rings = [];
-  for (const root of heavy) {
-    if (globalSeen.has(root)) continue;
-    const parent = new Map([[root, null]]);
-    const treeEdges = new Set();
-    const queue = [root];
-    let qi = 0;
-    while (qi < queue.length) {
-      const u = queue[qi++];
-      for (const v of adj(u)) {
-        if (!parent.has(v)) { parent.set(v, u); treeEdges.add(edgeKey(u, v)); queue.push(v); }
-      }
-    }
-    for (const i of parent.keys()) globalSeen.add(i);
-    for (const u of parent.keys()) {
-      for (const v of adj(u)) {
-        if (v <= u || treeEdges.has(edgeKey(u, v))) continue;
-        const ring = smallestRingThroughEdge(adj, u, v);
-        if (ring) rings.push(ring);
-      }
-    }
-  }
-  const seenKeys = new Set();
-  return rings.filter((r) => {
-    const key = [...r].sort((a, b) => a - b).join(',');
-    if (seenKeys.has(key)) return false;
-    seenKeys.add(key);
-    return true;
-  });
-}
+// findRings는 model.js로 옮겼다(aromatize와 공유) — 여기서는 그대로 import해 쓴다.
 
 function centroid(pos) {
   let x = 0, y = 0;
