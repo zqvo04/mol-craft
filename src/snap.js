@@ -261,15 +261,24 @@ export function openSlots(mol, anchor) {
 // 빈 자리를 "실제로 결합할 수 있는 자리"와 "비공유 전자쌍 자리"로 나눈다.
 // openSlots는 전자 도메인 전체(결합 자리 + 비공유쌍)를 돌려주므로, 물의 산소를 조준하면
 // 자리 두 개가 보이는데 canBond는 거부한다 — 화면에는 빨간 구만 뜨고 "왜 안 되는지"는
-// 어디에도 안 나왔다. 남은 원자가 수만큼 앞에서부터 결합 자리로 보고 나머지를 비공유쌍으로
-// 표시하면, 붙일 수 없는 이유가 그림으로 설명된다.
-// 방향과 순서는 openSlots 그대로다 — 미리보기와 실제 부착 위치가 어긋나면 안 된다.
+// 어디에도 안 나왔다. 남은 원자가 수만큼 앞에서부터 결합 자리로 보고, 그 다음 LONE_PAIRS[el]
+// 개만큼만 비공유쌍으로 표시하면, 붙일 수 없는 이유가 그림으로 설명된다.
+// LONE_PAIRS 이후 남는 자리(있다면)는 다시 'bond'로 둔다 — openSlots는 원자가가 이미
+// 꽉 찬 원자에도 안전장치로 최소 1개는 돌려주는데(idealDirection이 undefined를 못 뱉게),
+// room 이후를 전부 비공유쌍으로 봤더니 탄소처럼 LONE_PAIRS가 0인 원소의 이 안전장치
+// 자리까지 보라색 "비공유 전자쌍"으로 뜨고 클릭하면 그 문구가 나왔다 — 카복실산의
+// 카보닐 탄소(원자가 3자리 다 찬 sp2)에서 실제로 이 오탐이 났다. 'bond'로 두면
+// canBond가 어차피 거부하므로(reason: 'valence-full') 화면은 빨강 + 정확한 문구로
+// 정상적으로 떨어진다 — kind는 색을 강제하는 경우(lonepair=보라)만 특별 취급하면 된다.
 export function slotKinds(mol, anchor) {
   const el = mol.atoms[anchor].el;
   const normal = MAX_VALENCE[el];
   const capMax = EXPANDED_VALENCE[el] ?? normal;
   const room = capMax === undefined ? 0 : Math.max(0, capMax - bondOrderSum(mol, anchor));
-  return openSlots(mol, anchor).map((dir, k) => ({ dir, kind: k < room ? 'bond' : 'lonepair' }));
+  const lonePairSlots = LONE_PAIRS[el] ?? 0;
+  return openSlots(mol, anchor).map((dir, k) => ({
+    dir, kind: k >= room && k < room + lonePairSlots ? 'lonepair' : 'bond',
+  }));
 }
 
 // 빈 자리 중 첫 번째. 기존 호출자(attachAtom·previewAttach·syncHydrogens)를 위한 유지 API.

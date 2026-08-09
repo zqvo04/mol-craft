@@ -446,3 +446,16 @@ test('slotKinds: 방향은 openSlots와 정확히 같다 (미리보기가 어긋
   const m = loadPreset('water');
   assert.deepEqual(slotKinds(m, 0).map((k) => k.dir), openSlots(m, 0));
 });
+
+test('slotKinds: 원자가가 완전히 찬 탄소는 안전장치 자리도 비공유쌍이 아니다 (아세트산 카보닐 탄소 회귀)', () => {
+  // C0-C1(단일)-O2(이중)-O3(단일): 카보닐 탄소(idx 1)는 시그마 자리 3개가 이미 다 찼다.
+  // openSlots는 원자가가 꽉 찬 원자에도 안전장치로 최소 1자리를 돌려주는데, 그 자리를
+  // "room 이후는 전부 비공유쌍"으로 분류하면 LONE_PAIRS[C]=0인데도 보라색 비공유쌍으로
+  // 표시되고 클릭 시 "비공유 전자쌍 자리입니다"라는 틀린 안내가 떴다.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1.5, 0, 0]);
+  addAtom(m, 'O', [2.1, 1.1, 0]); addAtom(m, 'O', [2.1, -1.1, 0]);
+  addBond(m, 0, 1, 1); addBond(m, 1, 2, 2); addBond(m, 1, 3, 1);
+  const kinds = slotKinds(m, 1);
+  assert.ok(kinds.every((k) => k.kind !== 'lonepair'), '탄소는 비공유 전자쌍을 가질 수 없다');
+});
