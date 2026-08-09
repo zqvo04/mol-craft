@@ -5,7 +5,7 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
-  geometryName, bondDistanceOk, cycleBondOrder,
+  geometryName, bondDistanceOk, cycleBondOrder, slotKinds,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -135,6 +135,8 @@ let firstRender = true;
 let selectionShapes = []; // '결합' 도구의 대기 앵커 강조 구 — 이 배열만 지웠다 다시 그린다.
 let overlayLabels = [];   // 선택 순서 배지 + 경고 배지. 셰이프와 수명주기가 달라 따로 관리한다.
 let bondHover2d = null; // 'bond' 도구 + 2D: pendingBond 찍은 뒤 커서가 올라간 두 번째 원자(고리 닫기 미리보기용)
+let warnAtoms = [];      // [{ i, level }] — 경고 글로우를 띄울 원자. render()가 채운다.
+let warnGlowEls = [];    // 재사용하는 .warnglow div들. 개수가 바뀔 때만 다시 만든다.
 
 function render() {
   const e = energy(state.mol, cachedTerms(state.mol));
@@ -192,19 +194,10 @@ function render() {
   for (const x of st.issues) {
     if (worst.get(x.atom) !== 'danger') worst.set(x.atom, x.level);
   }
-  // 경고는 원자를 감싸는 옅은 헤일로로 낸다. 배지(✕/▲)는 분자 위에 글자를 얹어 시선을
-  // 너무 강하게 끌었고, 그 전의 와이어프레임 구는 그물이 원자 모양을 가렸다. 반투명 구를
-  // 원자보다 조금 크게 깔면 "여기가 문제"라는 신호는 남고 형태와 CPK 색은 그대로 보인다.
-  // 어떤 문제인지(원자가 부족/초과·각도 편차)는 좌상단 HUD 칩이 글자로 알려준다.
-  for (const [i, level] of worst) {
-    const p = state.mol.atoms[i].pos;
-    selectionShapes.push(viewer.addSphere({
-      center: { x: p[0], y: p[1], z: p[2] },
-      radius: ATOM_RADIUS * 2.1,
-      color: level === 'danger' ? '#dc2626' : '#f59e0b',
-      opacity: level === 'danger' ? 0.24 : 0.16,
-    }));
-  }
+  // 경고는 3D 셰이프가 아니라 화면 위 CSS 글로우로 낸다(syncWarnGlows). 반투명 구는
+  // 3Dmol 조명에 색이 씻겨 회백색 얼룩이 됐고, P(#ff8000)·S(#e6c53d)처럼 CPK 색이
+  // 주황·노랑인 원소에서는 신호와 원소색이 아예 구분되지 않았다.
+  warnAtoms = [...worst].map(([i, level]) => ({ i, level }));
   if (firstRender) { viewer.zoomTo(); firstRender = false; }
   viewer.render();
   updatePanels(e);
@@ -216,8 +209,42 @@ function render() {
       : null;
     $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview, selection: state.selection });
   }
+  syncWarnGlows();
+  updateToolHint();
   saveLocal();
 }
+
+// 문제 원자의 3D 좌표를 화면 좌표로 옮겨 글로우 div를 얹는다. modelToScreen은 페이지
+// 좌표(rect+scroll 포함)를 돌려주므로 뷰어 rect와 스크롤을 빼야 한다(pickAtom과 같은 규칙).
+// div 개수가 바뀔 때만 DOM을 다시 만들고, 그 외에는 left/top만 갱신한다.
+function syncWarnGlows() {
+  const layer = $('warnlayer');
+  if (warnGlowEls.length !== warnAtoms.length) {
+    layer.innerHTML = '';
+    warnGlowEls = warnAtoms.map(() => layer.appendChild(document.createElement('div')));
+  }
+  if (warnAtoms.length === 0) return;
+  const rect = viewerEl.getBoundingClientRect();
+  warnAtoms.forEach((w, k) => {
+    const p = state.mol.atoms[w.i]?.pos;
+    const el = warnGlowEls[k];
+    if (!p) { el.style.display = 'none'; return; }
+    const s = viewer.modelToScreen({ x: p[0], y: p[1], z: p[2] });
+    el.className = `warnglow ${w.level}`;
+    el.style.display = 'block';
+    el.style.left = `${s.x - rect.left - window.scrollX}px`;
+    el.style.top = `${s.y - rect.top - window.scrollY}px`;
+  });
+}
+
+// 카메라가 움직여도 글로우가 따라붙어야 하는데 3Dmol에는 카메라 변경 이벤트가 없다.
+// 글로우가 있을 때만 도는 rAF 루프로 매 프레임 위치를 다시 잡는다(div 몇 개짜리 작업이라
+// WebGL 렌더에 비하면 비용이 없다시피 하다).
+function warnGlowLoop() {
+  if (warnAtoms.length) syncWarnGlows();
+  requestAnimationFrame(warnGlowLoop);
+}
+requestAnimationFrame(warnGlowLoop);
 
 const $ = (id) => document.getElementById(id);
 
@@ -528,6 +555,31 @@ function setTool(tool) {
   bondHover2d = null;
   document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
+  updateToolHint();
+}
+
+// 현재 도구의 사용법과 진행 상태를 한 줄로 보여준다. 도구가 무엇을 하는지 화면에 늘
+// 떠 있어야 한다 — 특히 '결합·차수'는 원자 잇기와 차수 바꾸기를 겸하는데 그 사실이
+// 툴팁에만 있어서 아무도 몰랐다.
+const TOOL_HINT = {
+  select: '<b>선택</b> — 원자 클릭. Shift+클릭으로 여러 개, 빈 곳 드래그로 박스 선택. 2~4개를 고르면 거리·각도·이면각이 우측에 나옵니다.',
+  erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
+  bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
+  place: '<b>붙이기</b> — 원자를 조준하면 빈 자리가 보입니다. <b>R</b> 키나 휠로 자리를 바꾸고 클릭해 붙입니다. 보라색 자리는 비공유 전자쌍이라 붙일 수 없습니다.',
+};
+
+function updateToolHint() {
+  let msg = TOOL_HINT[state.tool] ?? '';
+  if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
+  if (state.tool === 'bond' && state.pendingBond !== null) {
+    const i = state.pendingBond;
+    msg = `<b>결합·차수</b> — <b>${state.mol.atoms[i].el}${i}</b> 선택됨. 이을 원자를 클릭하세요 (Esc 취소).`;
+  }
+  if (state.tool === 'select' && state.selection.length >= 2) {
+    msg += ` · <b>${state.selection.length}개</b> 선택됨`;
+  }
+  msg += ' <span style="opacity:.7">· 카메라: WASD 회전 · QE 확대축소 · Shift+WASD 이동</span>';
+  $('toolhint').innerHTML = msg;
 }
 
 $('tool-select').onclick = () => setTool('select');
@@ -559,7 +611,8 @@ function drawGhost() {
   for (const s of ghostShapes) viewer.removeShape(s);
   const g = state.ghost;
   const a = state.mol.atoms[g.anchor].pos;
-  const color = !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
+  const color = g.kinds[g.slot] === 'lonepair' ? '#a855f7'
+    : !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
   const opacity = blinkOn ? 0.6 : 0.22;
   ghostShapes = [
     viewer.addSphere({
@@ -567,14 +620,17 @@ function drawGhost() {
       color: '#38bdf8', opacity: 0.9, wireframe: true,
     }),
   ];
-  // 활성이 아닌 빈 자리들 — 여기로도 붙일 수 있다는 것을 보여준다(R 키/휠로 전환).
-  if (g.ok && g.slots.length > 1) {
+  // 활성이 아닌 빈 자리들. 비공유 전자쌍 자리는 보라로 구분한다 — 거기엔 원자를 붙일 수
+  // 없고, 붙일 수 없다는 사실 자체가 화학 정보다(물의 산소가 왜 두 자리를 남기는지).
+  if (g.slots.length > 1) {
     const len = Math.hypot(g.pos[0] - a[0], g.pos[1] - a[1], g.pos[2] - a[2]);
     g.slots.forEach((d, k) => {
       if (k === g.slot) return;
       const p = add(a, scale(d, len));
       ghostShapes.push(viewer.addSphere({
-        center: { x: p[0], y: p[1], z: p[2] }, radius: 0.18, color, opacity: 0.16,
+        center: { x: p[0], y: p[1], z: p[2] }, radius: 0.18,
+        color: g.kinds[k] === 'lonepair' ? '#a855f7' : color,
+        opacity: g.kinds[k] === 'lonepair' ? 0.30 : 0.16,
       }));
     });
   }
@@ -609,13 +665,18 @@ function clearGhost() {
 // 미리 보여준 자리가 곧 실제로 붙는 자리라는 보장은 그대로 유지된다(같은 배열을 쓴다).
 function previewAttach(anchor, el) {
   const a = state.mol.atoms[anchor].pos;
-  const slots = openSlots(state.mol, anchor);
+  const kinds = slotKinds(state.mol, anchor);
+  const slots = kinds.map((k) => k.dir);
   const slot = ((state.slot % slots.length) + slots.length) % slots.length;
   const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
   const len = check.ok ? check.targetLength : 1.6;
-  return { anchor, slots, slot, pos: add(a, scale(slots[slot], len)), ok: check.ok, reason: check.reason, el };
+  return {
+    anchor, slots, slot, kinds: kinds.map((k) => k.kind),
+    pos: add(a, scale(slots[slot], len)),
+    ok: check.ok, reason: check.reason, el,
+  };
 }
 
 viewerEl.addEventListener('pointermove', (ev) => {
@@ -741,7 +802,9 @@ viewerEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
     if (!state.ghost) return;
     if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
-    else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
+    else if (state.ghost.kinds[state.ghost.slot] === 'lonepair') {
+      toast('비공유 전자쌍 자리입니다 — 원자가 들어갈 수 없습니다', 'err');
+    } else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
@@ -864,9 +927,60 @@ sketch2dEl.addEventListener('contextmenu', (ev) => {
   if (hit) deleteAtom(Number(hit.dataset.atom));
 });
 
+// ---- 키보드 카메라 -----------------------------------------------------------
+// 마인크래프트식 조작감의 핵심은 "누르고 있으면 계속 움직인다"이다. keydown 한 번에 한 칸씩
+// 돌리면 뚝뚝 끊겨서 오히려 마우스 드래그보다 못하다. 눌린 키를 집합으로 들고 있다가
+// 매 프레임 적용한다.
+// W/S 상하 회전 · A/D 좌우 회전 · Q/E 확대·축소 · Shift와 함께면 평행이동(패닝).
+// 아래 keydown 핸들러가 이 두 Set을 참조하므로, TDZ를 피하려면 핸들러보다 위에 선언해야 한다.
+const CAMERA_KEYS = new Set(['w', 'a', 's', 'd', 'q', 'e']);
+const heldKeys = new Set();
+const ROT_STEP = 2.0;   // 프레임당 도(度)
+const PAN_STEP = 2.5;   // 프레임당 픽셀
+const ZOOM_STEP = 1.02; // 프레임당 배율
+
+function cameraLoop() {
+  if (heldKeys.size) {
+    const pan = heldKeys.has('shift');
+    if (pan) {
+      let dx = 0, dy = 0;
+      if (heldKeys.has('a')) dx -= PAN_STEP;
+      if (heldKeys.has('d')) dx += PAN_STEP;
+      if (heldKeys.has('w')) dy -= PAN_STEP;
+      if (heldKeys.has('s')) dy += PAN_STEP;
+      if (dx || dy) viewer.translate(dx, dy);
+    } else {
+      if (heldKeys.has('a')) viewer.rotate(-ROT_STEP, 'y');
+      if (heldKeys.has('d')) viewer.rotate(ROT_STEP, 'y');
+      if (heldKeys.has('w')) viewer.rotate(-ROT_STEP, 'x');
+      if (heldKeys.has('s')) viewer.rotate(ROT_STEP, 'x');
+    }
+    if (heldKeys.has('q')) viewer.zoom(1 / ZOOM_STEP);
+    if (heldKeys.has('e')) viewer.zoom(ZOOM_STEP);
+    viewer.render();
+  }
+  requestAnimationFrame(cameraLoop);
+}
+requestAnimationFrame(cameraLoop);
+
+document.addEventListener('keyup', (ev) => {
+  heldKeys.delete(ev.key.toLowerCase());
+  if (!ev.shiftKey) heldKeys.delete('shift');
+});
+// 창을 벗어나면 키가 눌린 채로 남아 카메라가 계속 도는 것을 막는다.
+window.addEventListener('blur', () => heldKeys.clear());
+
 // ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
 document.addEventListener('keydown', (ev) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+  // 카메라 키는 수식키가 없을 때만 잡는다(Ctrl+A 전체선택, Ctrl+D 복제와 겹치지 않게).
+  const k = ev.key.toLowerCase();
+  if (CAMERA_KEYS.has(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    heldKeys.add(k);
+    if (ev.shiftKey) heldKeys.add('shift'); else heldKeys.delete('shift');
+    return;
+  }
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
   if (ev.key === 'r' || ev.key === 'R') { cycleSlot(1); return; }
   // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
@@ -886,18 +1000,33 @@ $('duplicate').onclick = duplicateSelection;
 
 // 2D 보기: sketch2d.renderSVG가 그리는 진짜 골격 구조식으로 3D 뷰어를 덮는다(3Dmol
 // 스타일 흉내가 아니라 완전히 별도 SVG 렌더러 — layout()이 만든 좌표를 그대로 그린다).
-// 3D -> 2D는 좌표만 안 그릴 뿐 데이터는 그대로라 변환이 필요 없다. 2D -> 3D로 돌아갈 때는
-// syncHydrogens()를 한 번 불러 완전한 분자로 만든다(골격식 규칙 3: 해석 = 부족한 원자가를
-// 채우는 것) — 지금은 항상 이미 포화 상태라 사실상 무연산이지만, 나중에 2D에서 탄소
-// 골격만 그리고 3D로 넘어오는 편집 흐름이 생기면 이 한 줄이 그 완성을 담당한다.
+// 3D -> 2D는 좌표만 안 그릴 뿐 데이터는 그대로라 변환이 필요 없다.
 $('view2d').onclick = () => {
   state.flat = !state.flat;
   document.body.dataset.flat = String(state.flat);
   $('sketch2d').hidden = !state.flat;
   $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기(골격식)';
   $('view2d').setAttribute('aria-pressed', String(state.flat));
-  if (!state.flat) { syncHydrogens(state.mol); minimize(state.mol, { maxSteps: 120 }); }
+  // 화면 전환은 보기만 바꾼다 — 분자는 손대지 않는다. 예전엔 3D로 돌아올 때마다
+  // syncHydrogens가 빈 원자가를 전부 H로 채웠는데, 되돌리기 스냅샷도 없어서
+  // "탄소 골격만 그려두고 나중에 O를 붙이려던" 계획이 C4H10으로 굳어버렸고
+  // 카보닐을 만들려고 남겨둔 C-O가 메탄올이 됐다. 수소 채움은 이제 명시적 버튼이다.
   render();
+};
+
+// 빈 원자가를 수소로 채운다. 예전엔 2D->3D 전환이 이걸 몰래 했는데, 화면을 보려고
+// 누른 버튼이 분자를 영구히 바꾸는 건(되돌리기 스냅샷도 없었다) 사용자가 예상할 수 없다.
+// 이제는 이 버튼을 눌러야만 채워지고, Ctrl+Z로 되돌릴 수 있다.
+$('fill-h').onclick = () => {
+  const before = state.mol.atoms.length;
+  pushUndo();
+  syncHydrogens(state.mol);
+  const added = state.mol.atoms.length - before;
+  if (added === 0) { state.undoStack.pop(); toast('채울 빈 자리가 없습니다'); return; }
+  minimize(state.mol, { maxSteps: 120 });
+  checkSnaps();
+  render();
+  toast(`수소 ${added}개 추가`);
 };
 
 $('colorby').onchange = (ev) => {

@@ -45,7 +45,7 @@
     color: var(--fg);
     display: grid;
     grid-template-columns: 1fr 340px;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto auto 1fr;
     height: 100vh;
   }
   header, #toolbar {
@@ -76,6 +76,15 @@
     min-height: 0;
     background: var(--bg);
   }
+  /* 3Dmol이 뷰어 캔버스를 position:absolute; z-index:0으로 붙이는데, 우리 HTML
+     오버레이(토스트·HUD·범례·박스선택·경고 글로우)는 z-index를 안 줘서 auto였다 —
+     그러면 DOM 순서상 캔버스가 나중에 붙어(3Dmol이 정적 마크업보다 늦게 삽입) 전부
+     가려진다. 실제로 스크린샷을 찍어보면 텍스트·색이 하나도 안 보였다(DOM엔 있는데
+     화면엔 없는 상태 — textContent로만 확인하면 못 잡는다). 캔버스보다 위로 올린다.
+     #sketch2d는 그 위에 또 덮여야 하므로 기존 z-index:5를 그대로 둔다(아래 목록에
+     안 넣는다 — 넣으면 ID 선택자끼리라도 이 규칙이 :not() 때문에 특이도가 더 높아져
+     5를 1로 깎아버린다). */
+  #legend, #toast, #stability, #boxselect, #warnlayer { z-index: 1; }
   #legend {
     position: absolute;
     left: 16px;
@@ -147,7 +156,7 @@
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12.5px; }
   td { padding: 3px 0; } td:last-child { text-align: right; }
   @media (max-width: 720px) {
-    body { grid-template-columns: 1fr; grid-template-rows: auto 55vh 1fr; }
+    body { grid-template-columns: 1fr; grid-template-rows: auto auto 55vh 1fr; }
     aside { border-left: none; border-top: 1px solid var(--border); }
     #disclaimer { max-width: none; text-align: left; margin-left: 0; }
   }
@@ -183,11 +192,39 @@
     background: var(--primary); color: var(--primary-fg); border-color: var(--primary);
   }
   #toolbar-sep { width: 1px; align-self: stretch; background: var(--border); }
+  /* 현재 도구가 무슨 일을 하는지 항상 한 줄로 보여준다 — 예전엔 툴팁에만 있어서
+     '결합' 도구가 원자 잇기와 차수 바꾸기를 겸한다는 걸 알 방법이 없었다. */
+  #toolhint {
+    grid-column: 1 / -1;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    font-size: 12px;
+    color: var(--muted-fg);
+    min-height: 28px;
+  }
+  #toolhint b { color: var(--fg); font-weight: 600; }
   #boxselect {
     position: absolute; display: none; pointer-events: none;
     border: 1px dashed var(--primary);
     background: color-mix(in srgb, var(--primary) 15%, transparent);
   }
+  /* 경고 하이라이트. 3D 반투명 구로 만들었더니 3Dmol 조명이 색을 씻어내
+     회백색 얼룩(측정값 rgb(245,246,246))이 됐고, P·S처럼 CPK 색이 주황·노랑인
+     원소에서는 신호와 원소색이 구분되지 않았다. 화면 위에 얹는 CSS 글로우는
+     조명과 무관하고 색을 그대로 유지한다. */
+  #warnlayer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .warnglow {
+    position: absolute;
+    width: 58px; height: 58px;
+    margin: -29px 0 0 -29px;      /* 중심 정렬 — transform은 안 쓴다(매 프레임 갱신이라 left/top이 싸다) */
+    border-radius: 50%;
+    animation: glowpulse 2.2s ease-in-out infinite;
+  }
+  .warnglow.warn   { background: radial-gradient(circle, rgba(245,158,11,.55) 0%, rgba(245,158,11,.18) 45%, transparent 70%); }
+  .warnglow.danger { background: radial-gradient(circle, rgba(220,38,38,.60) 0%, rgba(220,38,38,.20) 45%, transparent 70%); }
+  @keyframes glowpulse { 50% { opacity: .45; } }
+  body[data-flat="true"] #warnlayer { display: none; }
 </style>
 </head>
 <body>
@@ -210,19 +247,22 @@
   <div id="tools">
     <button id="tool-select" class="tool active" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
     <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
-    <button id="tool-bond" class="tool" data-tool="bond" title="결합: 원자 두 개를 순서대로 클릭해 잇기(고리 닫기) · 결합선을 클릭하면 차수 1↔2↔3">결합</button>
+    <button id="tool-bond" class="tool" data-tool="bond" title="원자 두 개를 순서대로 클릭하면 잇고, 결합선을 클릭하면 차수가 바뀝니다">결합·차수</button>
   </div>
   <div id="toolbar-sep"></div>
   <div id="palette" title="원소를 고르면 붙이기 도구로 전환됩니다 (숫자키 1~9)"></div>
   <div id="toolbar-sep"></div>
   <button id="undo" title="실행취소 (Ctrl+Z)">↶ 실행취소</button>
   <button id="duplicate" title="선택 복제 (Ctrl+D)">복제</button>
+  <button id="fill-h" title="빈 원자가를 수소로 채웁니다 (되돌리기 가능)">수소 채우기</button>
   <button id="view2d" aria-pressed="false" title="골격 구조식(스켈레탈 포뮬러) 보기 전환">2D 보기</button>
 </div>
+<div id="toolhint"></div>
 <div id="viewer">
   <div id="toast"></div>
   <div id="stability"></div>
   <div id="boxselect"></div>
+  <div id="warnlayer"></div>
   <div id="legend"><span>응력 낮음</span><span class="bar"></span><span>응력 높음</span></div>
   <div id="sketch2d" hidden></div>
 </div>
