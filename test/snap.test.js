@@ -4,6 +4,7 @@ import { createMolecule, addAtom, addBond, neighbors, measure } from '../src/mod
 import {
   canBond, snapTarget, vseprCheck, newSnapEvents, SNAP_RADIUS_FACTOR, idealDirection, openSlots, stability,
   implicitH, formula, syncHydrogens, hudSummary, geometryName, bondDistanceOk, cycleBondOrder, electronDomains,
+  slotKinds,
 } from '../src/snap.js';
 import { distance, angleDeg, dot } from '../src/geom.js';
 import { loadPreset } from '../src/presets.js';
@@ -414,4 +415,34 @@ test('electronDomains: π 결합은 시그마 자리를 차지하지 않는다',
 
   assert.equal(electronDomains(loadPreset('water'), 0), 4);   // 물은 그대로
   assert.equal(electronDomains(loadPreset('methane'), 0), 4); // 메탄도 그대로
+});
+
+test('slotKinds: 물의 산소는 빈 자리 둘 다 비공유 전자쌍이다', () => {
+  const w = loadPreset('water');
+  const kinds = slotKinds(w, 0);
+  assert.equal(kinds.length, 2);
+  assert.deepEqual(kinds.map((k) => k.kind), ['lonepair', 'lonepair']);
+});
+
+test('slotKinds: 결합 1개짜리 탄소는 세 자리 모두 결합 가능하다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'H', [1.1, 0, 0]);
+  addBond(m, 0, 1, 1);
+  const kinds = slotKinds(m, 0);
+  assert.equal(kinds.length, 3);
+  assert.deepEqual(kinds.map((k) => k.kind), ['bond', 'bond', 'bond']);
+});
+
+test('slotKinds: 하이드록실 산소는 결합 자리 없이 비공유쌍만 남는다', () => {
+  // C-O-H: 산소는 원자가 2를 다 썼고 비공유쌍 2개가 남는다.
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [1.4, 0, 0]); addAtom(m, 'H', [1.9, 0.9, 0]);
+  addBond(m, 0, 1, 1); addBond(m, 1, 2, 1);
+  assert.deepEqual(slotKinds(m, 1).map((k) => k.kind), ['lonepair', 'lonepair']);
+});
+
+test('slotKinds: 방향은 openSlots와 정확히 같다 (미리보기가 어긋나면 안 된다)', () => {
+  const m = loadPreset('water');
+  assert.deepEqual(slotKinds(m, 0).map((k) => k.dir), openSlots(m, 0));
 });

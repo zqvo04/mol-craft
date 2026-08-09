@@ -5,7 +5,7 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
-  geometryName, bondDistanceOk, cycleBondOrder,
+  geometryName, bondDistanceOk, cycleBondOrder, slotKinds,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS } from './presets.js';
@@ -559,7 +559,8 @@ function drawGhost() {
   for (const s of ghostShapes) viewer.removeShape(s);
   const g = state.ghost;
   const a = state.mol.atoms[g.anchor].pos;
-  const color = !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
+  const color = g.kinds[g.slot] === 'lonepair' ? '#a855f7'
+    : !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
   const opacity = blinkOn ? 0.6 : 0.22;
   ghostShapes = [
     viewer.addSphere({
@@ -567,14 +568,17 @@ function drawGhost() {
       color: '#38bdf8', opacity: 0.9, wireframe: true,
     }),
   ];
-  // 활성이 아닌 빈 자리들 — 여기로도 붙일 수 있다는 것을 보여준다(R 키/휠로 전환).
-  if (g.ok && g.slots.length > 1) {
+  // 활성이 아닌 빈 자리들. 비공유 전자쌍 자리는 보라로 구분한다 — 거기엔 원자를 붙일 수
+  // 없고, 붙일 수 없다는 사실 자체가 화학 정보다(물의 산소가 왜 두 자리를 남기는지).
+  if (g.slots.length > 1) {
     const len = Math.hypot(g.pos[0] - a[0], g.pos[1] - a[1], g.pos[2] - a[2]);
     g.slots.forEach((d, k) => {
       if (k === g.slot) return;
       const p = add(a, scale(d, len));
       ghostShapes.push(viewer.addSphere({
-        center: { x: p[0], y: p[1], z: p[2] }, radius: 0.18, color, opacity: 0.16,
+        center: { x: p[0], y: p[1], z: p[2] }, radius: 0.18,
+        color: g.kinds[k] === 'lonepair' ? '#a855f7' : color,
+        opacity: g.kinds[k] === 'lonepair' ? 0.30 : 0.16,
       }));
     });
   }
@@ -609,13 +613,18 @@ function clearGhost() {
 // 미리 보여준 자리가 곧 실제로 붙는 자리라는 보장은 그대로 유지된다(같은 배열을 쓴다).
 function previewAttach(anchor, el) {
   const a = state.mol.atoms[anchor].pos;
-  const slots = openSlots(state.mol, anchor);
+  const kinds = slotKinds(state.mol, anchor);
+  const slots = kinds.map((k) => k.dir);
   const slot = ((state.slot % slots.length) + slots.length) % slots.length;
   const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
   const len = check.ok ? check.targetLength : 1.6;
-  return { anchor, slots, slot, pos: add(a, scale(slots[slot], len)), ok: check.ok, reason: check.reason, el };
+  return {
+    anchor, slots, slot, kinds: kinds.map((k) => k.kind),
+    pos: add(a, scale(slots[slot], len)),
+    ok: check.ok, reason: check.reason, el,
+  };
 }
 
 viewerEl.addEventListener('pointermove', (ev) => {
@@ -741,7 +750,9 @@ viewerEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
     if (!state.ghost) return;
     if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
-    else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
+    else if (state.ghost.kinds[state.ghost.slot] === 'lonepair') {
+      toast('비공유 전자쌍 자리입니다 — 원자가 들어갈 수 없습니다', 'err');
+    } else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);

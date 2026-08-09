@@ -258,6 +258,20 @@ export function openSlots(mol, anchor) {
   return slots;
 }
 
+// 빈 자리를 "실제로 결합할 수 있는 자리"와 "비공유 전자쌍 자리"로 나눈다.
+// openSlots는 전자 도메인 전체(결합 자리 + 비공유쌍)를 돌려주므로, 물의 산소를 조준하면
+// 자리 두 개가 보이는데 canBond는 거부한다 — 화면에는 빨간 구만 뜨고 "왜 안 되는지"는
+// 어디에도 안 나왔다. 남은 원자가 수만큼 앞에서부터 결합 자리로 보고 나머지를 비공유쌍으로
+// 표시하면, 붙일 수 없는 이유가 그림으로 설명된다.
+// 방향과 순서는 openSlots 그대로다 — 미리보기와 실제 부착 위치가 어긋나면 안 된다.
+export function slotKinds(mol, anchor) {
+  const el = mol.atoms[anchor].el;
+  const normal = MAX_VALENCE[el];
+  const capMax = EXPANDED_VALENCE[el] ?? normal;
+  const room = capMax === undefined ? 0 : Math.max(0, capMax - bondOrderSum(mol, anchor));
+  return openSlots(mol, anchor).map((dir, k) => ({ dir, kind: k < room ? 'bond' : 'lonepair' }));
+}
+
 // 빈 자리 중 첫 번째. 기존 호출자(attachAtom·previewAttach·syncHydrogens)를 위한 유지 API.
 export function idealDirection(mol, anchor) {
   return openSlots(mol, anchor)[0];
