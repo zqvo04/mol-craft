@@ -886,18 +886,33 @@ $('duplicate').onclick = duplicateSelection;
 
 // 2D 보기: sketch2d.renderSVG가 그리는 진짜 골격 구조식으로 3D 뷰어를 덮는다(3Dmol
 // 스타일 흉내가 아니라 완전히 별도 SVG 렌더러 — layout()이 만든 좌표를 그대로 그린다).
-// 3D -> 2D는 좌표만 안 그릴 뿐 데이터는 그대로라 변환이 필요 없다. 2D -> 3D로 돌아갈 때는
-// syncHydrogens()를 한 번 불러 완전한 분자로 만든다(골격식 규칙 3: 해석 = 부족한 원자가를
-// 채우는 것) — 지금은 항상 이미 포화 상태라 사실상 무연산이지만, 나중에 2D에서 탄소
-// 골격만 그리고 3D로 넘어오는 편집 흐름이 생기면 이 한 줄이 그 완성을 담당한다.
+// 3D -> 2D는 좌표만 안 그릴 뿐 데이터는 그대로라 변환이 필요 없다.
 $('view2d').onclick = () => {
   state.flat = !state.flat;
   document.body.dataset.flat = String(state.flat);
   $('sketch2d').hidden = !state.flat;
   $('view2d').textContent = state.flat ? '3D 보기' : '2D 보기(골격식)';
   $('view2d').setAttribute('aria-pressed', String(state.flat));
-  if (!state.flat) { syncHydrogens(state.mol); minimize(state.mol, { maxSteps: 120 }); }
+  // 화면 전환은 보기만 바꾼다 — 분자는 손대지 않는다. 예전엔 3D로 돌아올 때마다
+  // syncHydrogens가 빈 원자가를 전부 H로 채웠는데, 되돌리기 스냅샷도 없어서
+  // "탄소 골격만 그려두고 나중에 O를 붙이려던" 계획이 C4H10으로 굳어버렸고
+  // 카보닐을 만들려고 남겨둔 C-O가 메탄올이 됐다. 수소 채움은 이제 명시적 버튼이다.
   render();
+};
+
+// 빈 원자가를 수소로 채운다. 예전엔 2D->3D 전환이 이걸 몰래 했는데, 화면을 보려고
+// 누른 버튼이 분자를 영구히 바꾸는 건(되돌리기 스냅샷도 없었다) 사용자가 예상할 수 없다.
+// 이제는 이 버튼을 눌러야만 채워지고, Ctrl+Z로 되돌릴 수 있다.
+$('fill-h').onclick = () => {
+  const before = state.mol.atoms.length;
+  pushUndo();
+  syncHydrogens(state.mol);
+  const added = state.mol.atoms.length - before;
+  if (added === 0) { state.undoStack.pop(); toast('채울 빈 자리가 없습니다'); return; }
+  minimize(state.mol, { maxSteps: 120 });
+  checkSnaps();
+  render();
+  toast(`수소 ${added}개 추가`);
 };
 
 $('colorby').onchange = (ev) => {
