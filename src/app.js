@@ -210,6 +210,7 @@ function render() {
     $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview, selection: state.selection });
   }
   syncWarnGlows();
+  updateToolHint();
   saveLocal();
 }
 
@@ -554,6 +555,31 @@ function setTool(tool) {
   bondHover2d = null;
   document.querySelectorAll('#tools button').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
+  updateToolHint();
+}
+
+// 현재 도구의 사용법과 진행 상태를 한 줄로 보여준다. 도구가 무엇을 하는지 화면에 늘
+// 떠 있어야 한다 — 특히 '결합·차수'는 원자 잇기와 차수 바꾸기를 겸하는데 그 사실이
+// 툴팁에만 있어서 아무도 몰랐다.
+const TOOL_HINT = {
+  select: '<b>선택</b> — 원자 클릭. Shift+클릭으로 여러 개, 빈 곳 드래그로 박스 선택. 2~4개를 고르면 거리·각도·이면각이 우측에 나옵니다.',
+  erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
+  bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
+  place: '<b>붙이기</b> — 원자를 조준하면 빈 자리가 보입니다. <b>R</b> 키나 휠로 자리를 바꾸고 클릭해 붙입니다. 보라색 자리는 비공유 전자쌍이라 붙일 수 없습니다.',
+};
+
+function updateToolHint() {
+  let msg = TOOL_HINT[state.tool] ?? '';
+  if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
+  if (state.tool === 'bond' && state.pendingBond !== null) {
+    const i = state.pendingBond;
+    msg = `<b>결합·차수</b> — <b>${state.mol.atoms[i].el}${i}</b> 선택됨. 이을 원자를 클릭하세요 (Esc 취소).`;
+  }
+  if (state.tool === 'select' && state.selection.length >= 2) {
+    msg += ` · <b>${state.selection.length}개</b> 선택됨`;
+  }
+  msg += ' <span style="opacity:.7">· 카메라: WASD 회전 · QE 확대축소 · Shift+WASD 이동</span>';
+  $('toolhint').innerHTML = msg;
 }
 
 $('tool-select').onclick = () => setTool('select');
