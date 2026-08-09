@@ -18,7 +18,7 @@ const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I']
 const state = {
   mol: loadPreset('methane'),
   colorBy: 'element', // 'element' | 'strain' — 조립 중에는 원소 구분이 우선이라 원소 색이 기본이다
-  tool: 'select', // 'select' | 'place' | 'erase' | 'bond' — 클릭 동작.
+  tool: 'view', // 'view' | 'select' | 'place' | 'erase' | 'bond' — 클릭 동작.
   element: 'C',
   selection: [],
   snapState: {},
@@ -1145,7 +1145,7 @@ $('colorby').onchange = (ev) => {
 document.body.dataset.colorby = state.colorBy;
 enhanceSelect($('colorby'));
 
-setTool('select');
+setTool('view');
 
 $('preset').innerHTML = Object.entries(PRESETS)
   .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
