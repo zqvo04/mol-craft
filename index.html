@@ -137,6 +137,13 @@
     align-items: center;
     flex-wrap: wrap;
   }
+  /* backdrop-filter는 header에 별도 스태킹 컨텍스트를 만들지만, header 자체는
+     position이 없어 "안 떠 있는(static)" 형제로 취급된다 — 그러면 DOM에서
+     뒤에 오는 형제(#toolbar, #viewer, aside 등, 전부 static)가 나중에 칠해져
+     header 안의 드롭다운 목록(.dropdown-list, position:absolute)이 밑으로
+     깔려버린다. header를 양수 z-index로 띄워서 형제들 위에서 항상 그려지게
+     한다 — 드롭다운이 header 밖으로 넘쳐도 이 규칙 하나로 해결된다. */
+  header { position: relative; z-index: 5; }
   header strong {
     font-size: 16px;
     font-weight: 600;
@@ -456,8 +463,8 @@
 </header>
 <div id="toolbar">
   <div id="tools">
-    <button id="tool-view" class="tool" data-tool="view" title="보기: 클릭해도 아무것도 바뀌지 않습니다 — 드래그로 카메라만 돌립니다">보기</button>
-    <button id="tool-select" class="tool active" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
+    <button id="tool-view" class="tool active" data-tool="view" title="보기: 클릭해도 아무것도 바뀌지 않습니다 — 드래그로 카메라만 돌립니다">보기</button>
+    <button id="tool-select" class="tool" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
     <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
     <button id="tool-bond" class="tool" data-tool="bond" title="원자 두 개를 순서대로 클릭하면 잇고, 결합선을 클릭하면 차수가 바뀝니다">결합·차수</button>
   </div>
