@@ -569,6 +569,7 @@ function setTool(tool) {
 // 떠 있어야 한다 — 특히 '결합·차수'는 원자 잇기와 차수 바꾸기를 겸하는데 그 사실이
 // 툴팁에만 있어서 아무도 몰랐다.
 const TOOL_HINT = {
+  view: '<b>보기</b> — 클릭·드래그해도 분자가 바뀌지 않습니다. 마우스로 편하게 돌려보세요(휠 확대, 드래그 회전).',
   select: '<b>선택</b> — 원자 클릭. Shift+클릭으로 여러 개, 빈 곳 드래그로 박스 선택. 2~4개를 고르면 거리·각도·이면각이 우측에 나옵니다.',
   erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
   bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
@@ -589,6 +590,7 @@ function updateToolHint() {
   $('toolhint').innerHTML = msg;
 }
 
+$('tool-view').onclick = () => setTool('view');
 $('tool-select').onclick = () => setTool('select');
 $('tool-erase').onclick = () => setTool('erase');
 $('tool-bond').onclick = () => setTool('bond');
@@ -746,6 +748,7 @@ function onBoxUp(ev) {
 // (붙이기는 앵커를 찾는 방식이 서로 달라 각자 처리하지만, 이 분기만은 절대 두 군데
 // 따로 두지 않는다 — 나중에 어긋나는 원인이 된다).
 function handleAtomClick(hit, shiftKey) {
+  if (state.tool === 'view') return; // 보기 도구는 클릭해도 아무 일도 일어나지 않는다.
   if (state.tool === 'erase') { deleteAtom(hit); return; }
   if (state.tool === 'bond') { handleBondClick(hit); return; }
   if (shiftKey) toggleSelect(hit);
@@ -829,7 +832,7 @@ viewerEl.addEventListener('click', (ev) => {
 // 3D와 2D가 히트테스트 방식만 다르고 동작은 같으므로 deleteAtom 하나를 공유한다.
 viewerEl.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
-  if (state.flat) return; // 2D가 위에 덮여 있으면 아래 핸들러가 처리한다
+  if (state.flat || state.tool === 'view') return; // 2D가 위에 덮여 있으면 아래 핸들러가 처리한다. 보기 도구는 우클릭도 무시한다.
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
   if (hit !== -1) deleteAtom(hit);
 });
@@ -930,6 +933,7 @@ sketch2dEl.addEventListener('click', (ev) => {
 
 sketch2dEl.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
+  if (state.tool === 'view') return;
   const hit = ev.target.closest('[data-atom]');
   if (hit) deleteAtom(Number(hit.dataset.atom));
 });
