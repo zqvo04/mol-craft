@@ -76,6 +76,15 @@
     min-height: 0;
     background: var(--bg);
   }
+  /* 3Dmol이 뷰어 캔버스를 position:absolute; z-index:0으로 붙이는데, 우리 HTML
+     오버레이(토스트·HUD·범례·박스선택·경고 글로우)는 z-index를 안 줘서 auto였다 —
+     그러면 DOM 순서상 캔버스가 나중에 붙어(3Dmol이 정적 마크업보다 늦게 삽입) 전부
+     가려진다. 실제로 스크린샷을 찍어보면 텍스트·색이 하나도 안 보였다(DOM엔 있는데
+     화면엔 없는 상태 — textContent로만 확인하면 못 잡는다). 캔버스보다 위로 올린다.
+     #sketch2d는 그 위에 또 덮여야 하므로 기존 z-index:5를 그대로 둔다(아래 목록에
+     안 넣는다 — 넣으면 ID 선택자끼리라도 이 규칙이 :not() 때문에 특이도가 더 높아져
+     5를 1로 깎아버린다). */
+  #legend, #toast, #stability, #boxselect, #warnlayer { z-index: 1; }
   #legend {
     position: absolute;
     left: 16px;
