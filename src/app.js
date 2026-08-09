@@ -1036,12 +1036,110 @@ $('fill-h').onclick = () => {
   toast(`수소 ${added}개 추가`);
 };
 
+// 네이티브 <select>의 열린 목록은 OS가 그려서 유리 패널 스타일을 입힐 수 없다
+// (appearance: base-select는 이 글을 쓰는 시점 기준 CSS.supports만 통과하고
+// 실제 런타임 동작은 아직 못 믿을 브라우저가 많았다). <select>는 숨겨서
+// 상태값(.value, change 이벤트)으로만 쓰고, 버튼+목록을 직접 그려 그 위에서
+// 클릭·키보드를 처리한 뒤 select.value를 갱신하고 진짜 change 이벤트를
+// 쏴서 기존 onchange 배선을 그대로 재사용한다 — 선택 로직 자체는 손대지 않는다.
+function enhanceSelect(select) {
+  const wrap = document.createElement('div');
+  wrap.className = 'dropdown';
+  select.before(wrap);
+  wrap.appendChild(select);
+  select.classList.add('dropdown-native');
+  select.tabIndex = -1;
+  select.setAttribute('aria-hidden', 'true');
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'dropdown-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  if (select.title) trigger.title = select.title;
+  const label = document.createElement('span');
+  label.className = 'dropdown-label';
+  trigger.append(label, iconChevron());
+  wrap.appendChild(trigger);
+
+  const list = document.createElement('ul');
+  list.className = 'dropdown-list';
+  list.setAttribute('role', 'listbox');
+  list.hidden = true;
+  wrap.appendChild(list);
+
+  let optionEls = [];
+  const buildOptions = () => {
+    list.innerHTML = '';
+    optionEls = [...select.options].map((opt) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.className = 'dropdown-option';
+      li.textContent = opt.textContent;
+      li.dataset.value = opt.value;
+      li.tabIndex = -1;
+      list.appendChild(li);
+      return li;
+    });
+  };
+  const syncLabel = () => {
+    label.textContent = select.options[select.selectedIndex]?.textContent ?? '';
+    for (const li of optionEls) li.setAttribute('aria-selected', String(li.dataset.value === select.value));
+  };
+  const close = () => { list.hidden = true; trigger.setAttribute('aria-expanded', 'false'); };
+  const open = () => {
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    (optionEls.find((li) => li.dataset.value === select.value) ?? optionEls[0])?.focus();
+  };
+  const choose = (li) => {
+    select.value = li.dataset.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    syncLabel();
+    close();
+    trigger.focus();
+  };
+
+  trigger.addEventListener('click', () => (list.hidden ? open() : close()));
+  list.addEventListener('click', (ev) => {
+    const li = ev.target.closest('.dropdown-option');
+    if (li) choose(li);
+  });
+  list.addEventListener('keydown', (ev) => {
+    const i = optionEls.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); optionEls[Math.min(optionEls.length - 1, i + 1)]?.focus(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); optionEls[Math.max(0, i - 1)]?.focus(); }
+    else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); choose(document.activeElement); }
+    else if (ev.key === 'Escape' || ev.key === 'Tab') { close(); trigger.focus(); }
+  });
+  document.addEventListener('click', (ev) => { if (!wrap.contains(ev.target)) close(); });
+
+  buildOptions();
+  syncLabel();
+}
+
+function iconChevron() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'chev');
+  svg.setAttribute('viewBox', '0 0 10 10');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.6');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M1.5 3.5 5 7l3.5-3.5');
+  svg.appendChild(path);
+  return svg;
+}
+
 $('colorby').onchange = (ev) => {
   state.colorBy = ev.target.value;
   document.body.dataset.colorby = state.colorBy;
   render();
 };
 document.body.dataset.colorby = state.colorBy;
+enhanceSelect($('colorby'));
 
 setTool('select');
 
@@ -1060,6 +1158,7 @@ $('preset').onchange = (ev) => {
   const note = PRESETS[ev.target.value].note;
   if (note) toast(note);
 };
+enhanceSelect($('preset'));
 
 // 진입 시 우선순위: URL 해시 > localStorage > 기본 프리셋. 손상된 링크/저장값은
 // 조용히 무시하고 다음 우선순위로 넘어간다.
