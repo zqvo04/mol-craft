@@ -901,9 +901,60 @@ sketch2dEl.addEventListener('contextmenu', (ev) => {
   if (hit) deleteAtom(Number(hit.dataset.atom));
 });
 
+// ---- 키보드 카메라 -----------------------------------------------------------
+// 마인크래프트식 조작감의 핵심은 "누르고 있으면 계속 움직인다"이다. keydown 한 번에 한 칸씩
+// 돌리면 뚝뚝 끊겨서 오히려 마우스 드래그보다 못하다. 눌린 키를 집합으로 들고 있다가
+// 매 프레임 적용한다.
+// W/S 상하 회전 · A/D 좌우 회전 · Q/E 확대·축소 · Shift와 함께면 평행이동(패닝).
+// 아래 keydown 핸들러가 이 두 Set을 참조하므로, TDZ를 피하려면 핸들러보다 위에 선언해야 한다.
+const CAMERA_KEYS = new Set(['w', 'a', 's', 'd', 'q', 'e']);
+const heldKeys = new Set();
+const ROT_STEP = 2.0;   // 프레임당 도(度)
+const PAN_STEP = 2.5;   // 프레임당 픽셀
+const ZOOM_STEP = 1.02; // 프레임당 배율
+
+function cameraLoop() {
+  if (heldKeys.size) {
+    const pan = heldKeys.has('shift');
+    if (pan) {
+      let dx = 0, dy = 0;
+      if (heldKeys.has('a')) dx -= PAN_STEP;
+      if (heldKeys.has('d')) dx += PAN_STEP;
+      if (heldKeys.has('w')) dy -= PAN_STEP;
+      if (heldKeys.has('s')) dy += PAN_STEP;
+      if (dx || dy) viewer.translate(dx, dy);
+    } else {
+      if (heldKeys.has('a')) viewer.rotate(-ROT_STEP, 'y');
+      if (heldKeys.has('d')) viewer.rotate(ROT_STEP, 'y');
+      if (heldKeys.has('w')) viewer.rotate(-ROT_STEP, 'x');
+      if (heldKeys.has('s')) viewer.rotate(ROT_STEP, 'x');
+    }
+    if (heldKeys.has('q')) viewer.zoom(1 / ZOOM_STEP);
+    if (heldKeys.has('e')) viewer.zoom(ZOOM_STEP);
+    viewer.render();
+  }
+  requestAnimationFrame(cameraLoop);
+}
+requestAnimationFrame(cameraLoop);
+
+document.addEventListener('keyup', (ev) => {
+  heldKeys.delete(ev.key.toLowerCase());
+  if (!ev.shiftKey) heldKeys.delete('shift');
+});
+// 창을 벗어나면 키가 눌린 채로 남아 카메라가 계속 도는 것을 막는다.
+window.addEventListener('blur', () => heldKeys.clear());
+
 // ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
 document.addEventListener('keydown', (ev) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+  // 카메라 키는 수식키가 없을 때만 잡는다(Ctrl+A 전체선택, Ctrl+D 복제와 겹치지 않게).
+  const k = ev.key.toLowerCase();
+  if (CAMERA_KEYS.has(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    heldKeys.add(k);
+    if (ev.shiftKey) heldKeys.add('shift'); else heldKeys.delete('shift');
+    return;
+  }
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
   if (ev.key === 'r' || ev.key === 'R') { cycleSlot(1); return; }
   // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
