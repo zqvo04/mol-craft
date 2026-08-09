@@ -268,7 +268,24 @@
   #palette button { min-width: 32px; font-family: var(--font-mono); font-weight: 600; }
   button.tool.active, #palette button.active {
     background: var(--primary); color: var(--primary-fg);
-    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    box-shadow:
+      var(--shadow-sm),
+      inset 0 1px 0 rgba(255, 255, 255, 0.4),
+      0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent),
+      0 0 10px 0 color-mix(in srgb, var(--primary) 35%, transparent);
+    animation: tool-glow 2.4s ease-in-out infinite;
+  }
+  @keyframes tool-glow {
+    50% {
+      box-shadow:
+        var(--shadow-sm),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4),
+        0 0 0 4px color-mix(in srgb, var(--primary) 55%, transparent),
+        0 0 18px 2px color-mix(in srgb, var(--primary) 60%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button.tool.active, #palette button.active { animation: none; }
   }
   #toolbar-sep { width: 1px; align-self: stretch; background: var(--border); }
   /* 현재 도구가 무슨 일을 하는지 항상 한 줄로 보여준다 — 예전엔 툴팁에만 있어서
