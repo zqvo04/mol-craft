@@ -107,7 +107,6 @@ export function loadStart(start) {
   const mol = materialize(start);
   for (const r of start.replace ?? []) mol.atoms[r.atom].el = r.el;
   if (start.setDihedral) setDihedral(mol, start.setDihedral.atoms, start.setDihedral.deg);
-  if (start.flipZ) for (const a of mol.atoms) a.pos = [a.pos[0], a.pos[1], -a.pos[2]];
   if (start.syncH) syncHydrogens(mol);
   if (start.relax) minimize(mol, { maxSteps: 400 });
   return mol;

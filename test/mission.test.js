@@ -139,13 +139,6 @@ test('loadStart: replace는 인덱스를 밀지 않는다', () => {
   assert.equal(formula(m), 'C7H14');
 });
 
-test('loadStart: flipZ는 z부호만 뒤집는다', () => {
-  const a = loadStart({ preset: 'cyclohexane_chair' });
-  const b = loadStart({ preset: 'cyclohexane_chair', flipZ: true });
-  assert.equal(b.atoms[0].pos[2], -a.atoms[0].pos[2]);
-  assert.equal(b.atoms[0].pos[0], a.atoms[0].pos[0]);
-});
-
 test('loadStart: relax는 에너지를 낮춘다', () => {
   const raw = loadStart({ preset: 'cyclohexane_boat' });
   const done = loadStart({ preset: 'cyclohexane_boat', relax: true });
