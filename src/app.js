@@ -12,6 +12,8 @@ import { loadPreset, PRESETS, RING_TEMPLATES, computeRingPlacement, insertRingTe
 import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
+import { initMissionPanel } from './mission-ui.js';
+import { TRUST } from './trust.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -270,6 +272,9 @@ const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: 
 // 총에너지 · 항별 막대 · 선택 측정값 · VSEPR 이상각 만족 여부를 패널에 반영한다.
 function updatePanels(e) {
   $('total').textContent = `${e.total.toFixed(2)} kcal/mol`;
+  // 총에너지는 항상 "같은 위상 안에서의 상대 비교"로만 읽어야 한다. 미션과 무관하게 상시 표시한다.
+  $('trust-badge').textContent =
+    `${TRUST.relative.badge} ${TRUST.relative.label} — ${TRUST.relative.note}`;
 
   const max = Math.max(...Object.values(e.byType).map(Math.abs), 0.01);
   $('breakdown').innerHTML = '<table>' + Object.entries(e.byType).map(([k, v]) =>
@@ -1303,3 +1308,16 @@ async function restoreOnLoad() {
   render();
 }
 restoreOnLoad();
+
+// 미션 패널. app은 상태를 넘겨주기만 하고 채점 로직은 전부 mission.js에 있다.
+initMissionPanel(document.getElementById('mission'), {
+  loadMolecule(mol) {
+    pushUndo();
+    state.mol = mol;
+    state.selection = [];
+    render();
+    saveLocal();
+  },
+  getMolecule: () => state.mol,
+  getSelection: () => state.selection,
+});

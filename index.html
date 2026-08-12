@@ -439,6 +439,17 @@
   .warnglow.danger { background: radial-gradient(circle, rgba(220,38,38,.60) 0%, rgba(220,38,38,.20) 45%, transparent 70%); }
   @keyframes glowpulse { 50% { opacity: .45; } }
   body[data-flat="true"] #warnlayer { display: none; }
+  #mission .mission-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  #mission .mission-item, #mission .mission-choice { text-align: left; width: 100%; }
+  #mission .mission-choice.active { outline: 2px solid var(--accent, #4a9eff); }
+  #mission .mission-meta { font-size: 12px; opacity: 0.7; }
+  #mission .mission-brief { font-size: 13px; line-height: 1.5; }
+  #mission .mission-choices { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+  #mission .mission-probe { margin-top: 8px; font-size: 13px; }
+  #mission .mission-trust, #trust-badge { font-size: 11px; opacity: 0.85; line-height: 1.4; }
+  #mission .mission-ok { color: #2e9e5b; font-size: 13px; margin-top: 8px; }
+  #mission .mission-bad { color: #d1603d; font-size: 13px; margin-top: 8px; }
+  #mission .mission-hint-text { font-size: 12px; opacity: 0.9; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -488,7 +499,8 @@
   <div id="sketch2d" hidden></div>
 </div>
 <aside>
-  <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>
+  <section id="mission"></section>
+  <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div><div id="trust-badge"></div></section>
   <section><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
   <section><h2>선택 측정</h2><div id="measure">원자를 2~4개 클릭</div></section>
   <section><h2>이면각 회전</h2>
