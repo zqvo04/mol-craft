@@ -972,8 +972,11 @@ export function validateMission(m) {
   }
   if (m.type === 'build' && !m.check) throw new Error(`${id}: build 미션에는 check가 필요합니다`);
   if (m.type !== 'build') {
-    if (!Array.isArray(m.choices) || m.choices.length < 2) {
-      throw new Error(`${id}: ${m.type} 미션에는 선택지가 2개 이상 필요합니다`);
+    // 선택지는 비어 있지만 않으면 된다 — 개수 하한은 미션 데이터 쪽에서 볼 문제다.
+    // (초안은 여기서 >= 2를 요구했는데, 위 테스트 두 개가 선택지 1개짜리 가짜 미션을 쓰므로
+    //  모순이었다. 실제 미션의 >= 2 하한은 Task 7의 mission-data 테스트가 강제한다.)
+    if (!Array.isArray(m.choices) || m.choices.length === 0) {
+      throw new Error(`${id}: ${m.type} 미션에는 선택지가 필요합니다`);
     }
     if (!m.choices.some((c) => c.id === m.answer)) {
       throw new Error(`${id}: answer "${m.answer}"가 choices에 없습니다`);
@@ -1333,6 +1336,14 @@ test('시드 미션은 10개이고 네 유형이 모두 쓰인다', () => {
   assert.equal(MISSIONS.length, 10);
   const types = new Set(MISSIONS.map((m) => m.type));
   for (const t of ['build', 'measure', 'predict', 'classify']) assert.ok(types.has(t), t);
+});
+
+// validateMission은 선택지가 비어 있지 않은지만 본다(가짜 미션을 쓰는 단위 테스트 때문).
+// 실제 미션의 하한은 여기서 강제한다 — 선택지가 하나뿐인 문제는 문제가 아니다.
+test('선택형 미션의 선택지는 2개 이상이다', () => {
+  for (const m of MISSIONS.filter((x) => x.type !== 'build')) {
+    assert.ok(m.choices.length >= 2, `${m.id}: 선택지 ${m.choices.length}개`);
+  }
 });
 
 test('ch04: 벤젠 고리 결합은 여섯 개가 모두 같은 길이다', () => {
