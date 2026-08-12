@@ -194,6 +194,225 @@ export const MISSIONS = [
     ],
     trust: 'relative',
   },
+
+  {
+    id: 'ch04-benzene-bond-length',
+    chapter: 4,
+    concept: '공명과 결합 길이 균등화',
+    type: 'measure',
+    title: '벤젠의 C–C 결합은 몇 종류인가',
+    brief: '케쿨레 구조는 단일결합과 이중결합이 번갈아 있다고 말합니다. 고리 결합 하나를 직접 재고, 그 값이 뜻하는 바를 고르세요.',
+    start: { ringTemplate: 'benzene' },
+    choices: [
+      { id: 'a', label: '두 종류 — 단일 1.54 Å와 이중 1.34 Å가 번갈아 나온다' },
+      { id: 'b', label: '한 종류 — 여섯 개가 모두 약 1.40 Å로 같다' },
+      { id: 'c', label: '여섯 개가 전부 제각각이다' },
+    ],
+    answer: 'b',
+    check: {
+      all: [
+        {
+          any: [
+            { selectionEquals: [0, 1] }, { selectionEquals: [1, 2] }, { selectionEquals: [2, 3] },
+            { selectionEquals: [3, 4] }, { selectionEquals: [4, 5] }, { selectionEquals: [5, 0] },
+          ],
+        },
+        { answerEquals: 'b' },
+      ],
+    },
+    diagnostics: [
+      {
+        when: { not: {
+          any: [
+            { selectionEquals: [0, 1] }, { selectionEquals: [1, 2] }, { selectionEquals: [2, 3] },
+            { selectionEquals: [3, 4] }, { selectionEquals: [4, 5] }, { selectionEquals: [5, 0] },
+          ],
+        } },
+        message: '고리를 이루는 탄소 두 개(이웃한 것)를 선택해야 합니다. C–H 결합이나 떨어진 원자를 고르면 안 됩니다.',
+      },
+    ],
+    hints: [
+      '고리 탄소 두 개를 선택하면 우측 "선택 측정"에 거리가 나옵니다.',
+      '이웃한 고리 탄소 여러 쌍을 차례로 재서 값을 비교해 보세요.',
+      '단일 C–C는 1.54 Å, 이중 C=C는 1.34 Å입니다. 잰 값은 그 사이입니다.',
+      '여섯 결합이 모두 약 1.40 Å로 같습니다. 공명으로 π 전자가 고리 전체에 퍼져 있기 때문입니다.',
+    ],
+    trust: 'geometry',
+  },
+
+  {
+    id: 'ch06-anti-periplanar',
+    chapter: 6,
+    concept: 'E2의 anti-periplanar 요구',
+    type: 'measure',
+    title: 'E2가 요구하는 기하를 재라',
+    brief: 'trans-1,2-다이브로모사이클로헥세인의 diaxial 배좌입니다. 두 브로민 사이의 이면각을 재고, 그 값이 무엇을 뜻하는지 고르세요.',
+    start: {
+      preset: 'cyclohexane_chair',
+      replace: [{ atom: 7, el: 'Br' }, { atom: 8, el: 'Br' }],
+      syncH: true, relax: true,
+    },
+    choices: [
+      { id: 'a', label: '약 60° — gauche 배치다' },
+      { id: 'b', label: '약 180° — anti-periplanar다. E2가 요구하는 기하다' },
+      { id: 'c', label: '약 90° — 수직이다' },
+      { id: 'd', label: '약 0° — 겹쳐 있다(syn)' },
+    ],
+    answer: 'b',
+    check: { all: [{ selectionEquals: [7, 0, 1, 8] }, { answerEquals: 'b' }] },
+    diagnostics: [
+      {
+        when: { not: { selectionEquals: [7, 0, 1, 8] } },
+        message: '브로민–탄소–탄소–브로민 네 원자를 순서대로 선택해야 이면각이 나옵니다.',
+      },
+    ],
+    hints: [
+      'E2는 이탈기와 β-수소가 같은 평면에서 정반대를 볼 때만 한 번에 일어납니다.',
+      '두 브로민과 그 사이의 탄소 두 개, 모두 네 원자를 순서대로 선택하세요.',
+      'Br–C–C–Br 순서로 고르면 "선택 측정"에 이면각이 나옵니다.',
+      '약 180° — anti-periplanar입니다. 두 axial 치환기가 인접 탄소에서 정반대를 봅니다.',
+    ],
+    trust: 'geometry',
+  },
+
+  {
+    id: 'ch08-ring-strain',
+    chapter: 8,
+    concept: '고리 크기와 각 스트레인',
+    type: 'predict',
+    title: '에폭사이드는 왜 그렇게 반응성이 큰가',
+    brief: '삼원자 고리 에폭사이드와 육원자 고리 테트라하이드로피란의 C–O–C 각을 비교합니다. 먼저 예측하세요.',
+    start: {
+      atoms: [['C', [-0.74, -0.40, 0]], ['C', [0.74, -0.40, 0]], ['O', [0, 0.80, 0]]],
+      bonds: [[0, 1], [0, 2], [1, 2]],
+      syncH: true, relax: true,
+    },
+    choices: [
+      { id: 'a', label: '둘 다 109.5° 부근 — sp³ 산소이므로' },
+      { id: 'b', label: '에폭사이드가 훨씬 좁다 — 삼각형이라 60°에 가깝게 눌린다' },
+      { id: 'c', label: '테트라하이드로피란이 더 좁다 — 고리가 크면 접히므로' },
+    ],
+    answer: 'b',
+    probe: {
+      kind: 'measure',
+      states: [
+        {
+          atoms: [['C', [-0.74, -0.40, 0]], ['C', [0.74, -0.40, 0]], ['O', [0, 0.80, 0]]],
+          bonds: [[0, 1], [0, 2], [1, 2]],
+          syncH: true, relax: true,
+        },
+        {
+          // cyclohexane_chair의 고리 좌표에서 한 자리를 산소로 바꾼 육원자 고리(옥세인).
+          atoms: [
+            ['O', [1.26, 0.73, 0.25]], ['C', [0.00, 1.46, -0.25]], ['C', [-1.26, 0.73, 0.25]],
+            ['C', [-1.26, -0.73, -0.25]], ['C', [0.00, -1.46, 0.25]], ['C', [1.26, -0.73, -0.25]],
+          ],
+          bonds: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0]],
+          syncH: true, relax: true,
+        },
+      ],
+      report: [
+        { label: '에폭사이드 C–O–C', value: 'angle', atoms: [0, 2, 1], state: 0 },
+        { label: '테트라하이드로피란 C–O–C', value: 'angle', atoms: [1, 0, 5], state: 1 },
+      ],
+    },
+    hints: [
+      'sp³ 원자가 원하는 결합각은 109.5°입니다.',
+      '삼원자 고리는 삼각형입니다. 삼각형의 내각 합은 180°입니다.',
+      '정삼각형이면 각 내각이 60° — sp³가 원하는 109.5°에서 약 50° 눌린 셈입니다.',
+      '에폭사이드가 훨씬 좁습니다(≈60°). 이 각 스트레인이 고리를 열려는 반응의 구동력입니다.',
+    ],
+    trust: 'geometry',
+  },
+
+  {
+    id: 'ch09-carbonyl-addition',
+    chapter: 9,
+    concept: '친핵성 첨가 — sp²에서 sp³로',
+    type: 'build',
+    title: '카보닐에 물을 더해 수화물을 만들어라',
+    brief: '아세트알데하이드의 카보닐 탄소에 산소를 하나 더 붙이고, C=O를 단일결합으로 낮춰 gem-다이올(C2H6O2)을 만드세요.',
+    start: {
+      atoms: [['C', [0, 0, 0]], ['C', [1.50, 0, 0]], ['O', [2.14, 1.11, 0]]],
+      bonds: [[0, 1], [1, 2, 2]],
+      syncH: true, relax: true,
+    },
+    check: {
+      all: [
+        { formula: 'C2H6O2' },
+        { hasGroup: { el: 'C', bonded: [{ el: 'C', order: 1 }, { el: 'O', order: 1 }, { el: 'O', order: 1 }, { el: 'H', order: 1 }] } },
+        { noSevere: true },
+      ],
+    },
+    diagnostics: [
+      {
+        when: { formula: 'C2H4O' },
+        message: '아직 아무것도 붙지 않았습니다. 붙이기 도구에서 O를 골라 카보닐 탄소에 붙이세요.',
+      },
+      {
+        when: { hasGroup: { el: 'O', bonded: [{ el: 'C', order: 2 }] } },
+        message: 'C=O 이중결합이 남아 있습니다. 결합·차수 도구로 그 결합선을 클릭해 단일결합으로 낮추세요.',
+      },
+    ],
+    hints: [
+      '친핵체가 카보닐 탄소를 공격하면 π 결합의 전자쌍이 산소로 밀려납니다.',
+      '그러면 그 탄소의 결합 상대가 3개에서 4개로 늘고, 남은 C=O는 C–O가 됩니다.',
+      '① 붙이기 도구로 O를 카보닐 탄소에 붙인다 ② 결합·차수 도구로 C=O 선을 클릭해 단일로 낮춘다 ③ 수소 채우기를 누른다.',
+      '완성 분자식은 C2H6O2입니다. 그 탄소의 결합각이 120°에서 109.5°로 바뀐 것을 "선택 측정"으로 확인하세요.',
+    ],
+    trust: 'geometry',
+  },
+
+  {
+    id: 'ch15-cis-trans-alkene',
+    chapter: 15,
+    concept: 'cis 이중결합의 꺾임',
+    type: 'predict',
+    title: 'cis와 trans 중 어느 쪽이 안정한가',
+    brief: '2-뷰텐의 두 기하 이성질체는 연결 방식이 같습니다. 어느 쪽이 더 안정할지 먼저 답하세요. 지방산의 융점이 여기서 갈립니다.',
+    start: {
+      atoms: [['C', [-1.50, 0.60, 0]], ['C', [-0.67, -0.45, 0]],
+              ['C', [0.67, -0.45, 0]], ['C', [1.50, 0.60, 0]]],
+      bonds: [[0, 1], [1, 2, 2], [2, 3]],
+      syncH: true,
+      setDihedral: { atoms: [0, 1, 2, 3], deg: 180 },
+      relax: true,
+    },
+    choices: [
+      { id: 'a', label: 'cis — 두 메틸이 가까워 서로 끌어당긴다' },
+      { id: 'b', label: 'trans — 두 메틸이 정반대라 반발이 적다' },
+      { id: 'c', label: '같다 — 같은 분자식이므로' },
+    ],
+    answer: 'b',
+    probe: {
+      kind: 'minimize',
+      states: [
+        {
+          atoms: [['C', [-1.50, 0.60, 0]], ['C', [-0.67, -0.45, 0]],
+                  ['C', [0.67, -0.45, 0]], ['C', [1.50, 0.60, 0]]],
+          bonds: [[0, 1], [1, 2, 2], [2, 3]],
+          syncH: true, setDihedral: { atoms: [0, 1, 2, 3], deg: 0 }, relax: true,
+        },
+        {
+          atoms: [['C', [-1.50, 0.60, 0]], ['C', [-0.67, -0.45, 0]],
+                  ['C', [0.67, -0.45, 0]], ['C', [1.50, 0.60, 0]]],
+          bonds: [[0, 1], [1, 2, 2], [2, 3]],
+          syncH: true, setDihedral: { atoms: [0, 1, 2, 3], deg: 180 }, relax: true,
+        },
+      ],
+      report: [
+        { label: 'cis (0°)', value: 'energy', state: 0 },
+        { label: 'trans (180°)', value: 'energy', state: 1 },
+      ],
+    },
+    hints: [
+      'π 결합은 회전하지 않으므로 cis와 trans는 서로 변환되지 않습니다 — 별개의 화합물입니다.',
+      'cis에서는 두 메틸이 이중결합의 같은 쪽에 있습니다. 얼마나 가까운지 보세요.',
+      '가까운 두 덩어리 사이에는 반데르발스 반발이 생깁니다. trans에는 그 반발이 없습니다.',
+      'trans가 더 안정합니다. 그래서 cis 지방산은 사슬이 꺾여 촘촘히 쌓이지 못하고, 융점이 낮아 상온에서 액체입니다.',
+    ],
+    trust: 'relative',
+  },
 ];
 
 export const missionById = (id) => {
