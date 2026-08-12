@@ -1,6 +1,6 @@
 // 미션 패널. 채점·진단·힌트·probe는 mission.js가 전부 처리하므로 여기서는 화면만 만든다.
 import { MISSIONS } from './mission-data.js';
-import { evaluate, maxHintLevel, loadStart, runProbe, validateMission } from './mission.js';
+import { evaluate, maxHintLevel, loadStart, runProbe } from './mission.js';
 
 const LS_KEY = 'molcraft:progress';
 
@@ -18,7 +18,9 @@ const entryFor = (p, id) => p[id] ?? { status: 'todo', attempts: 0, hintLevel: 0
 const STATUS_ICON = { todo: '·', failed: '✗', passed: '✓' };
 
 export function initMissionPanel(root, hooks) {
-  for (const m of MISSIONS) validateMission(m); // 저작 오류를 첫 화면에서 드러낸다
+  // 여기서 validateMission을 돌리지 않는다. 그 함수는 미션마다 probe를 실제로 실행하므로
+  // 10개면 페이지 로드가 815 ms 동안 멈추고, 미션 하나가 잘못되면 패널 전체가 죽는다.
+  // 저작 오류는 test/mission-data.test.js가 이미 CI에서 전부 잡는다.
   let progress = loadProgress();
   let current = null;   // 진행 중 미션
   let answer = null;    // predict/classify/measure의 선택
@@ -121,8 +123,11 @@ export function initMissionPanel(root, hooks) {
     }
 
     const cap = maxHintLevel(st.attempts);
+    // 힌트를 다 본 상태(4/4)에서 "더 시도해야 열립니다"는 거짓말이다 — 더 열릴 게 없다.
+    const exhausted = st.hintLevel >= m.hints.length;
     const hintBtn = el('button', 'mission-hint',
-      st.hintLevel >= cap ? `힌트 (${st.hintLevel}/${cap} — 더 시도해야 열립니다)` : '힌트 보기');
+      exhausted ? `힌트 (${st.hintLevel}/${m.hints.length} — 전부 봤습니다)`
+        : st.hintLevel >= cap ? `힌트 (${st.hintLevel}/${cap} — 더 시도해야 열립니다)` : '힌트 보기');
     hintBtn.disabled = st.hintLevel >= cap;
     hintBtn.addEventListener('click', () => {
       progress[m.id] = { ...st, hintLevel: st.hintLevel + 1 };
