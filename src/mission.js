@@ -2,8 +2,9 @@
 // DOM을 모른다 — mission-ui.js만 화면을 만진다.
 import { formula, stability, syncHydrogens } from './snap.js';
 import { measure, findRings, neighbors, createMolecule, addAtom, addBond, setDihedral } from './model.js';
-import { topologyKey, energy, minimize } from './uff.js';
+import { topologyKey, energy, minimize, scanDihedral } from './uff.js';
 import { loadPreset, RING_TEMPLATES } from './presets.js';
+import { trustFor, sameTopology, assertComparable } from './trust.js';
 
 // 각도 구간 판정. 이면각만 순환(cyclic)이다 — measure()가 -180~180을 돌려주므로
 // anti 배좌를 [150, 210]으로 적으면 -170°가 걸러진다. 360 법으로 정규화해야 한다.
@@ -110,4 +111,49 @@ export function loadStart(start) {
   if (start.syncH) syncHydrogens(mol);
   if (start.relax) minimize(mol, { maxSteps: 400 });
   return mol;
+}
+
+// ---- probe: predict 미션이 답 확정 후 돌리는 스크립트 계산 ----------------
+// 학생이 직접 조작할 필요가 없다. 잠그기 전에는 이 결과를 어떤 형태로도 노출하지 않는다.
+const FIXED = 2;
+
+function probeValue(kind, mols, r, scan) {
+  const mol = mols[r.state ?? 0];
+  if (kind === 'scanDihedral' && r.value === 'barrier') {
+    const profile = scanDihedral(mol, scan.atoms, { stepDeg: scan.stepDeg ?? 30 });
+    return `${Math.max(...profile.map((p) => p.relative)).toFixed(FIXED)} kcal/mol`;
+  }
+  switch (r.value) {
+    case 'energy': return `${energy(mol).total.toFixed(FIXED)} kcal/mol`;
+    case 'angle':
+    case 'dihedral': return `${measure(mol, r.atoms).toFixed(1)}°`;
+    case 'distance': return `${measure(mol, r.atoms).toFixed(3)} Å`;
+    case 'formula': return formula(mol);
+    case 'topologyEqual': return sameTopology(mols[0], mols[1]) ? '같습니다' : '다릅니다';
+    default: throw new Error(`probe: 알 수 없는 값 종류 "${r.value}"`);
+  }
+}
+
+export function runProbe(probe) {
+  const mols = probe.states.map((s) => loadStart(s));
+  if (probe.kind === 'minimize') for (const m of mols) minimize(m, { maxSteps: 400 });
+
+  const cross = mols.length === 2 && !sameTopology(mols[0], mols[1]);
+  if (cross && probe.report.some((r) => r.value === 'energy')) {
+    assertComparable(mols[0], mols[1], 'probe');
+  }
+  if (probe.report.some((r) => r.value === 'topologyEqual') && mols.length !== 2) {
+    throw new Error('probe: topologyEqual 리포트는 상태 두 개가 필요합니다');
+  }
+
+  const rows = probe.report.map((r) => ({
+    label: r.label,
+    text: probeValue(probe.kind, mols, r, probe.scan),
+  }));
+  // 화면에는 가장 약한 등급 하나를 붙인다 — 강한 등급이 약한 것을 가리면 안 된다.
+  const rank = { geometry: 0, relative: 1, blocked: 2 };
+  const trust = probe.report
+    .map((r) => trustFor(r.value, cross))
+    .reduce((a, b) => (rank[b.key] > rank[a.key] ? b : a));
+  return { rows, trust };
 }

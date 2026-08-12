@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePredicate, loadStart } from '../src/mission.js';
+import { evaluatePredicate, loadStart, runProbe } from '../src/mission.js';
 import { loadPreset } from '../src/presets.js';
 import { setDihedral, measure as measure3 } from '../src/model.js';
 import { topologyKey, energy } from '../src/uff.js';
@@ -154,4 +154,74 @@ test('loadStart: relax는 에너지를 낮춘다', () => {
 
 test('loadStart: 소스가 없으면 throw', () => {
   assert.throws(() => loadStart({ syncH: true }), /시작구조/);
+});
+
+test('runProbe: 단일 상태 각도 측정은 geometry 등급', () => {
+  const out = runProbe({
+    kind: 'minimize',
+    states: [{ preset: 'water' }],
+    report: [{ label: 'H–O–H', value: 'angle', atoms: [1, 0, 2] }],
+  });
+  assert.equal(out.trust.key, 'geometry');
+  assert.equal(out.rows.length, 1);
+  assert.match(out.rows[0].text, /10[0-9]\.[0-9]°/); // 최적화 후 ~104.5°
+});
+
+test('runProbe: 같은 위상 두 상태의 총에너지 비교는 relative 등급', () => {
+  const out = runProbe({
+    kind: 'minimize',
+    states: [
+      { preset: 'butane' },
+      { preset: 'butane', setDihedral: { atoms: [0, 1, 2, 3], deg: 60 } },
+    ],
+    report: [
+      { label: 'anti', value: 'energy', state: 0 },
+      { label: 'gauche', value: 'energy', state: 1 },
+    ],
+  });
+  assert.equal(out.trust.key, 'relative');
+  assert.equal(out.rows.length, 2);
+});
+
+test('runProbe: 위상이 다른 두 상태의 총에너지는 throw한다', () => {
+  assert.throws(() => runProbe({
+    kind: 'minimize',
+    states: [{ preset: 'ethane' }, { preset: 'ethylene' }],
+    report: [{ label: 'A', value: 'energy', state: 0 }, { label: 'B', value: 'energy', state: 1 }],
+  }), /총에너지는 비교할 수 없습니다/);
+});
+
+test('runProbe: 위상이 달라도 barrier 비교는 허용된다', () => {
+  const out = runProbe({
+    kind: 'scanDihedral',
+    states: [{ preset: 'ethane' }, { preset: 'ethylene' }],
+    scan: { atoms: [2, 0, 1, 5], stepDeg: 30 },
+    report: [
+      { label: '에탄', value: 'barrier', state: 0 },
+      { label: '에틸렌', value: 'barrier', state: 1 },
+    ],
+  });
+  assert.equal(out.trust.key, 'relative');
+  const val = (s) => Number(out.rows.find((r) => r.label === s).text.match(/[\d.]+/)[0]);
+  assert.ok(val('에틸렌') > val('에탄') * 3); // π 장벽이 σ 장벽보다 압도적으로 크다
+});
+
+test('runProbe: formula·topologyEqual 리포트', () => {
+  const out = runProbe({
+    kind: 'measure',
+    states: [
+      { preset: 'butane' },
+      { atoms: [['C', [0, 0, 0]], ['C', [1.53, 0, 0]], ['C', [-0.5, 1.45, 0]], ['C', [-0.5, -0.7, 1.26]]],
+        bonds: [[0, 1], [0, 2], [0, 3]], syncH: true, relax: true },
+    ],
+    report: [
+      { label: 'n-부탄 분자식', value: 'formula', state: 0 },
+      { label: '아이소부탄 분자식', value: 'formula', state: 1 },
+      { label: '연결 방식이 같은가', value: 'topologyEqual' },
+    ],
+  });
+  assert.equal(out.trust.key, 'geometry');
+  assert.equal(out.rows[0].text, 'C4H10');
+  assert.equal(out.rows[1].text, 'C4H10');
+  assert.equal(out.rows[2].text, '다릅니다');
 });
