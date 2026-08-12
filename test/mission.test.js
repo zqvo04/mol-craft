@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePredicate, loadStart, runProbe } from '../src/mission.js';
+import { evaluatePredicate, loadStart, runProbe, evaluate, maxHintLevel, validateMission } from '../src/mission.js';
 import { loadPreset } from '../src/presets.js';
 import { setDihedral, measure as measure3 } from '../src/model.js';
 import { topologyKey, energy } from '../src/uff.js';
@@ -224,4 +224,97 @@ test('runProbe: formula·topologyEqual 리포트', () => {
   assert.equal(out.rows[0].text, 'C4H10');
   assert.equal(out.rows[1].text, 'C4H10');
   assert.equal(out.rows[2].text, '다릅니다');
+});
+
+const H4 = ['힌트1', '힌트2', '힌트3', '정답'];
+
+const antiMission = {
+  id: 'test-anti', chapter: 2, concept: '배좌', type: 'build', title: 't', brief: 'b',
+  start: { preset: 'butane', setDihedral: { atoms: [0, 1, 2, 3], deg: 60 } },
+  check: { all: [{ formula: 'C4H10' }, { dihedral: [0, 1, 2, 3], within: [150, 210] }] },
+  diagnostics: [{
+    when: { dihedral: [0, 1, 2, 3], within: [40, 80] },
+    message: 'gauche 배좌입니다.',
+  }],
+  hints: H4, trust: 'geometry',
+};
+
+test('evaluate: 정답 상태는 통과한다', () => {
+  const mol = loadStart({ preset: 'butane' }); // anti
+  const out = evaluate(antiMission, { mol, selection: [], answer: null });
+  assert.equal(out.pass, true);
+  assert.equal(out.diagnostic, null);
+});
+
+test('evaluate: 지정 오답 상태는 지정 진단을 낸다', () => {
+  const mol = loadStart(antiMission.start); // gauche
+  const out = evaluate(antiMission, { mol, selection: [], answer: null });
+  assert.equal(out.pass, false);
+  assert.equal(out.diagnostic, 'gauche 배좌입니다.');
+});
+
+test('evaluate: 매칭되는 진단이 없으면 일반 메시지가 나온다', () => {
+  const mol = loadStart({ preset: 'butane', setDihedral: { atoms: [0, 1, 2, 3], deg: 110 } });
+  const out = evaluate(antiMission, { mol, selection: [], answer: null });
+  assert.equal(out.pass, false);
+  assert.match(out.diagnostic, /이면각/);
+});
+
+test('evaluate: predict 미션은 answer로 채점한다', () => {
+  const m = {
+    id: 't2', chapter: 1, concept: 'c', type: 'predict', title: 't', brief: 'b',
+    start: { preset: 'water' },
+    choices: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    answer: 'b',
+    probe: { kind: 'minimize', states: [{ preset: 'water' }],
+             report: [{ label: '각', value: 'angle', atoms: [1, 0, 2] }] },
+    hints: H4, trust: 'geometry',
+  };
+  const mol = loadStart(m.start);
+  assert.equal(evaluate(m, { mol, selection: [], answer: 'b' }).pass, true);
+  assert.equal(evaluate(m, { mol, selection: [], answer: 'a' }).pass, false);
+});
+
+test('maxHintLevel: 정답 힌트는 3회 시도 후에만 열린다', () => {
+  assert.equal(maxHintLevel(0), 3);
+  assert.equal(maxHintLevel(2), 3);
+  assert.equal(maxHintLevel(3), 4);
+  assert.equal(maxHintLevel(9), 4);
+});
+
+test('validateMission: 정상 미션은 통과', () => {
+  assert.doesNotThrow(() => validateMission(antiMission));
+});
+
+test('validateMission: 힌트가 4단 미만이면 throw', () => {
+  assert.throws(() => validateMission({ ...antiMission, hints: ['a', 'b'] }), /힌트/);
+});
+
+test('validateMission: 알 수 없는 술어는 throw', () => {
+  assert.throws(
+    () => validateMission({ ...antiMission, check: { pKa: 7 } }),
+    /pKa/,
+  );
+});
+
+test('validateMission: answer가 choices에 없으면 throw', () => {
+  assert.throws(() => validateMission({
+    ...antiMission, type: 'classify',
+    choices: [{ id: 'a', label: 'A' }], answer: 'z',
+  }), /answer/);
+});
+
+test('validateMission: 알 수 없는 type은 throw', () => {
+  assert.throws(() => validateMission({ ...antiMission, type: 'guess' }), /type/);
+});
+
+test('validateMission: 위상이 다른 상태의 energy probe는 throw', () => {
+  assert.throws(() => validateMission({
+    ...antiMission, type: 'predict',
+    choices: [{ id: 'a', label: 'A' }], answer: 'a', check: undefined,
+    probe: {
+      kind: 'minimize', states: [{ preset: 'ethane' }, { preset: 'ethylene' }],
+      report: [{ label: 'A', value: 'energy', state: 0 }, { label: 'B', value: 'energy', state: 1 }],
+    },
+  }), /총에너지는 비교할 수 없습니다/);
 });
