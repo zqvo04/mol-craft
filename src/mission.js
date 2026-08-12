@@ -1,8 +1,9 @@
 // 미션 채점기. 화학 판정은 전부 기존 함수에 위임하고, 여기서는 그것을 선언형으로 엮는다.
 // DOM을 모른다 — mission-ui.js만 화면을 만진다.
-import { formula, stability } from './snap.js';
-import { measure, findRings, neighbors } from './model.js';
-import { topologyKey, energy } from './uff.js';
+import { formula, stability, syncHydrogens } from './snap.js';
+import { measure, findRings, neighbors, createMolecule, addAtom, addBond, setDihedral } from './model.js';
+import { topologyKey, energy, minimize } from './uff.js';
+import { loadPreset, RING_TEMPLATES } from './presets.js';
 
 // 각도 구간 판정. 이면각만 순환(cyclic)이다 — measure()가 -180~180을 돌려주므로
 // anti 배좌를 [150, 210]으로 적으면 -170°가 걸러진다. 360 법으로 정규화해야 한다.
@@ -70,4 +71,43 @@ export function evaluatePredicate(pred, ctx) {
   const name = PREDICATE_NAMES.find((k) => k in pred);
   if (!name) throw new Error(`알 수 없는 술어: ${JSON.stringify(pred)}`);
   return PREDICATES[name](pred[name], pred, ctx);
+}
+
+// ---- 시작구조 로더 --------------------------------------------------------
+// 미션 데이터를 사람이 읽고 diff할 수 있게, base64 상태 문자열이 아니라 선언형으로 적는다.
+// 무거운 원자 골격만 쓰고 syncH가 수소를 채우므로 리터럴이 짧다.
+//
+// 불변식: 이 함수는 원자를 삭제하지 않는다. addAtom과 syncHydrogens의 채우기는 항상
+// 뒤에 붙으므로 골격 인덱스와 replace 인덱스는 변환 뒤에도 그대로다 —
+// 미션의 check·probe가 인덱스를 쓸 수 있는 근거다.
+function materialize(start) {
+  if (start.preset) return loadPreset(start.preset);
+  if (start.ringTemplate) {
+    const t = RING_TEMPLATES[start.ringTemplate];
+    if (!t) throw new Error(`알 수 없는 고리 템플릿: ${start.ringTemplate}`);
+    const m = createMolecule();
+    for (const [el, pos, type] of t.atoms) {
+      const idx = addAtom(m, el, pos);
+      if (type) m.atoms[idx].type = type;
+    }
+    for (const [i, j, order] of t.bonds) addBond(m, i, j, order ?? 1);
+    return m;
+  }
+  if (start.atoms) {
+    const m = createMolecule();
+    for (const [el, pos] of start.atoms) addAtom(m, el, pos);
+    for (const [i, j, order] of start.bonds ?? []) addBond(m, i, j, order ?? 1);
+    return m;
+  }
+  throw new Error('시작구조를 만들 수 없습니다: preset·ringTemplate·atoms 중 하나가 필요합니다');
+}
+
+export function loadStart(start) {
+  const mol = materialize(start);
+  for (const r of start.replace ?? []) mol.atoms[r.atom].el = r.el;
+  if (start.setDihedral) setDihedral(mol, start.setDihedral.atoms, start.setDihedral.deg);
+  if (start.flipZ) for (const a of mol.atoms) a.pos = [a.pos[0], a.pos[1], -a.pos[2]];
+  if (start.syncH) syncHydrogens(mol);
+  if (start.relax) minimize(mol, { maxSteps: 400 });
+  return mol;
 }
