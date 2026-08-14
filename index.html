@@ -14,6 +14,7 @@
   })();
 </script>
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<link rel="stylesheet" href="src/catalog.css">
 <style>
   :root {
     color-scheme: light dark;
@@ -455,6 +456,7 @@
   <button id="export-pdb">PDB</button>
   <button id="share">링크 복사</button>
   <button id="share-short">단축 링크</button>
+  <button id="catalog-open" class="catalog-open">분자 카탈로그 <span id="catalog-compare-count">0</span></button>
   <span id="disclaimer">UFF 역장 · 진공 · 정전기항 제외 · 정성 비교용(양자계산 대체 아님)</span>
   <button id="theme-toggle" title="다크모드 전환" aria-pressed="false">
     <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
@@ -502,6 +504,14 @@
   <section><h2>VSEPR 상태</h2><div id="vsepr">—</div></section>
   <section id="gallery-section" hidden><h2>공개 갤러리</h2><div id="gallery">불러오는 중…</div></section>
 </aside>
+<dialog id="catalog-dialog" aria-labelledby="catalog-title">
+  <div class="catalog-shell">
+    <header class="catalog-header"><div><span class="catalog-eyebrow">MOLECULAR DATABASE</span><h1 id="catalog-title">분자 카탈로그</h1><p id="catalog-status">카탈로그를 열어 검색을 시작하세요.</p></div><button id="catalog-close" aria-label="카탈로그 닫기">닫기</button></header>
+    <div class="catalog-controls"><label><span class="sr-only">분자 검색</span><input id="catalog-query" type="search" placeholder="이름 · 분자식 · CAS · SMILES 검색"></label><select id="catalog-category"><option value="all">모든 카테고리</option><option value="inorganic">무기</option><option value="organic">유기</option><option value="solvent">용매</option><option value="biochemical">생화학</option><option value="drug">약물</option><option value="polymer">고분자 전구체</option></select><select id="catalog-sort"><option value="relevance">관련도</option><option value="name">이름 A–Z</option><option value="mass-asc">분자량 낮은 순</option><option value="mass-desc">분자량 높은 순</option></select><button id="catalog-compare" disabled>비교 (0/3)</button></div>
+    <div class="catalog-meta"><span id="catalog-count">—</span><span>PubChem 기반 · 2D PNG 구조식</span></div>
+    <div class="catalog-layout"><div id="catalog-results" class="catalog-results"><p class="catalog-empty">분자 카탈로그를 불러오는 중입니다.</p></div><aside id="catalog-detail" class="catalog-detail" aria-live="polite"></aside></div>
+  </div>
+</dialog>
 <script>
   // 테마 토글. 저장된 선택이 없으면 시스템 설정을 그대로 따르고(root에
   // data-theme을 안 둠 — CSS의 prefers-color-scheme이 계속 실시간 반영),

@@ -12,6 +12,7 @@ import { loadPreset, PRESETS, RING_TEMPLATES, computeRingPlacement, insertRingTe
 import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
+import { initCatalog } from './catalog.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -1278,6 +1279,27 @@ $('preset').onchange = (ev) => {
   if (note) toast(note);
 };
 enhanceSelect($('preset'));
+
+// 카탈로그에서 PubChem SDF 구조를 불러오면 기존 조립·분석 상태로 교체한다.
+// 현재 UFF 지원 원소만 catalog.js에서 이 이벤트를 보낼 수 있어 분석 경로는 그대로 안전하다.
+document.addEventListener('mol-craft-catalog-load', (event) => {
+  const { molecule, name } = event.detail ?? {};
+  if (!molecule?.atoms?.length) return;
+  pushUndo();
+  state.mol = molecule;
+  state.selection = [];
+  state.snapState = {};
+  state.flat = false;
+  $('sketch2d').hidden = true;
+  $('view2d').textContent = '2D 보기(골격식)';
+  $('view2d').setAttribute('aria-pressed', 'false');
+  firstRender = true;
+  checkSnaps();
+  render();
+  toast(`${name} 구조를 불러왔습니다`);
+});
+
+initCatalog();
 
 // 진입 시 우선순위: URL 해시 > localStorage > 기본 프리셋. 손상된 링크/저장값은
 // 조용히 무시하고 다음 우선순위로 넘어간다.
