@@ -103,6 +103,16 @@ export const PRESETS = {
             [3, 12], [3, 13], [4, 14], [4, 15], [5, 16], [5, 17]],
     note: '의자보다 높은 에너지',
   },
+  glycine_tripeptide: {
+    name: '글리신 트라이펩타이드 골격',
+    atoms: [
+      ['N', [0.0, 1.0, 0.0]], ['C', [1.1, 0.1, 0.0]], ['C', [2.4, 0.7, 0.2]], ['O', [3.4, 0.1, 0.2]],
+      ['N', [2.3, 2.0, 0.0]], ['C', [3.5, 2.8, -0.5]], ['C', [4.8, 2.0, 0.1]], ['O', [5.9, 2.5, 0.1]],
+      ['N', [4.7, 0.7, -0.1]], ['C', [5.9, -0.2, 0.5]], ['C', [7.2, 0.6, -0.2]], ['O', [8.3, 0.1, -0.2]],
+    ],
+    bonds: [[0, 1], [1, 2], [2, 3, 2], [2, 4], [4, 5], [5, 6], [6, 7, 2], [6, 8], [8, 9], [9, 10], [10, 11, 2]],
+    note: '중앙 글리신의 φ/ψ와 라마찬드란형 좌표를 관찰하는 중성 골격 모식도 · 실제 쯔비터이온/수소결합은 미표현',
+  },
 };
 
 export function loadPreset(key) {
@@ -193,6 +203,116 @@ function aromaticPyridine() {
   return template;
 }
 
+function removeAttachedHydrogen(template, atomIndex) {
+  const hBond = template.bonds.find(([i, j]) => (i === atomIndex && template.atoms[j][0] === 'H') || (j === atomIndex && template.atoms[i][0] === 'H'));
+  const hIndex = hBond?.[0] === atomIndex ? hBond[1] : hBond?.[0];
+  if (!Number.isInteger(hIndex)) return;
+  template.atoms.splice(hIndex, 1);
+  template.bonds = template.bonds
+    .filter(([i, j]) => i !== hIndex && j !== hIndex)
+    .map(([i, j, order]) => [i > hIndex ? i - 1 : i, j > hIndex ? j - 1 : j, order]);
+}
+
+function aromaticPyrimidine() {
+  const template = hexRing(1.40, 1.08, false);
+  for (const index of [3, 4]) {
+    template.atoms[index][0] = 'N';
+    template.atoms[index][2] = 'N_R';
+    removeAttachedHydrogen(template, index);
+  }
+  return template;
+}
+
+function aromaticImidazole() {
+  const size = 5;
+  const radius = 1.40 / (2 * Math.sin(Math.PI / size));
+  const atoms = [];
+  const bonds = [];
+  for (let k = 0; k < size; k++) {
+    const theta = (k * 2 * Math.PI) / size;
+    const el = k === 3 || k === 4 ? 'N' : 'C';
+    atoms.push([el, [radius * Math.cos(theta), radius * Math.sin(theta), 0], el === 'N' ? 'N_R' : 'C_R']);
+  }
+  for (let k = 0; k < size; k++) bonds.push([k, (k + 1) % size, 1.5]);
+  for (let k = 1; k < size; k++) {
+    if (k === 4) continue; // 피리딘형 N에는 수소가 없다.
+    const p = atoms[k][1];
+    const idx = atoms.push(['H', add(p, scale(unit(p), 1.08)), 'H_']) - 1;
+    bonds.push([k, idx, 1]);
+  }
+  return { atoms, bonds, attachType: 'C_R', aromaticLonePairs: [3] };
+}
+
+function aromaticPurine() {
+  // 6원 피리미딘과 5원 이미다졸이 융합한 9원자 골격이다. 모든 결합을 1.5로 표시해
+  // 평면 공명을 드러내되, 공유 원자 3/4는 model.valenceUsed에서 교육용 보정을 적용한다.
+  const atoms = [
+    ['C', [1.40, 0.00, 0], 'C_R'], ['N', [0.70, 1.21, 0], 'N_R'], ['C', [-0.70, 1.21, 0], 'C_R'],
+    ['C', [-1.40, 0.00, 0], 'C_R'], ['C', [-0.70, -1.21, 0], 'C_R'], ['N', [0.70, -1.21, 0], 'N_R'],
+    ['N', [-2.35, 0.72, 0], 'N_R'], ['C', [-2.35, -0.72, 0], 'C_R'], ['N', [-1.55, -1.55, 0], 'N_R'],
+  ];
+  const bonds = [[0, 1, 1.5], [1, 2, 1.5], [2, 3, 1.5], [3, 4, 1.5], [4, 5, 1.5], [5, 0, 1.5], [3, 6, 1.5], [6, 7, 1.5], [7, 8, 1.5], [8, 4, 1.5]];
+  for (const index of [1, 2, 5, 6, 7]) {
+    const p = atoms[index][1];
+    const h = atoms.push(['H', add(p, scale(unit(p), 1.08)), 'H_']) - 1;
+    bonds.push([index, h, 1]);
+  }
+  return { atoms, bonds, attachType: 'C_R', aromaticLonePairs: [8], aromaticFusedAtoms: [3, 4], aromaticPiContributions: { 8: 2 } };
+}
+
+function pyrimidineNucleobase(key) {
+  const atoms = [
+    ['N', [1.40, 0.00, 0], 'N_R'], ['C', [0.70, 1.21, 0], 'C_2'], ['N', [-0.70, 1.21, 0], 'N_R'],
+    ['C', [-1.40, 0.00, 0], 'C_2'], ['C', [-0.70, -1.21, 0], 'C_2'], ['C', [0.70, -1.21, 0], 'C_2'],
+  ];
+  const bonds = key === 'cytosine'
+    ? [[0, 1, 1], [1, 2, 1], [2, 3, 2], [3, 4, 1], [4, 5, 2], [5, 0, 1]]
+    : [[0, 1, 1], [1, 2, 1], [2, 3, 1], [3, 4, 1], [4, 5, 2], [5, 0, 1]];
+  const attachO = (ringIndex) => {
+    const p = atoms[ringIndex][1];
+    const oxygen = atoms.push(['O', add(p, scale(unit(p), 1.23)), 'O_2']) - 1;
+    bonds.push([ringIndex, oxygen, 2]);
+  };
+  const attachAmino = (ringIndex) => {
+    const p = atoms[ringIndex][1];
+    const nitrogen = atoms.push(['N', add(p, scale(unit(p), 1.30)), 'N_R']) - 1;
+    bonds.push([ringIndex, nitrogen, 1]);
+  };
+  if (key === 'cytosine') { attachO(1); attachAmino(3); }
+  else { attachO(1); attachO(3); }
+  if (key === 'thymine') {
+    const p = atoms[4][1];
+    const methyl = atoms.push(['C', add(p, scale(unit(p), 1.45)), 'C_3']) - 1;
+    bonds.push([4, methyl, 1]);
+  }
+  return { atoms, bonds, attachType: 'N_R', nucleobase: key };
+}
+
+function purineNucleobase(key) {
+  // atom0은 퓨린 N9로, β-N-글리코사이드 결합에 쓰이는 첨부 지점이다.
+  const atoms = [
+    ['N', [-1.55, -1.55, 0], 'N_R'], ['C', [-2.35, -0.72, 0], 'C_R'], ['N', [-2.35, 0.72, 0], 'N_R'],
+    ['C', [-1.40, 0.00, 0], 'C_R'], ['C', [-0.70, 1.21, 0], 'C_2'], ['N', [0.70, 1.21, 0], 'N_R'],
+    ['C', [1.40, 0.00, 0], 'C_2'], ['N', [0.70, -1.21, 0], 'N_R'], ['C', [-0.70, -1.21, 0], 'C_R'],
+  ];
+  const bonds = key === 'adenine'
+    ? [[6, 5, 1], [5, 4, 1], [4, 3, 2], [3, 8, 1], [8, 7, 2], [7, 6, 1], [3, 2, 1], [2, 1, 2], [1, 0, 1], [0, 8, 1]]
+    : [[6, 5, 1], [5, 4, 1], [4, 3, 1], [3, 8, 2], [8, 7, 1], [7, 6, 2], [3, 2, 1], [2, 1, 2], [1, 0, 1], [0, 8, 1]];
+  const attachAmino = (ringIndex) => {
+    const p = atoms[ringIndex][1];
+    const nitrogen = atoms.push(['N', add(p, scale(unit(p), 1.30)), 'N_R']) - 1;
+    bonds.push([ringIndex, nitrogen, 1]);
+  };
+  if (key === 'adenine') attachAmino(4);
+  else {
+    attachAmino(6);
+    const p = atoms[4][1];
+    const oxygen = atoms.push(['O', add(p, scale(unit(p), 1.23)), 'O_2']) - 1;
+    bonds.push([4, oxygen, 2]);
+  }
+  return { atoms, bonds, attachType: 'N_R', nucleobase: key, aromaticFusedAtoms: [3, 8] };
+}
+
 function aromaticFuran() {
   const size = 5;
   const radius = 1.40 / (2 * Math.sin(Math.PI / size));
@@ -240,6 +360,14 @@ export const RING_TEMPLATES = {
   pyridine: { name: '피리딘', group: 'heteroring', detail: '질소 포함 방향족 고리', ...aromaticPyridine() },
   furan: { name: '푸란', group: 'heteroring', detail: '산소 포함 방향족 고리', ...aromaticFuran() },
   pyrrole: { name: '피롤', group: 'heteroring', detail: '비공유쌍 공여 방향족 고리', ...aromaticPyrrole() },
+  imidazole: { name: '이미다졸', group: 'heteroring', detail: '히스티딘 곁사슬의 5원 고리', ...aromaticImidazole() },
+  pyrimidine: { name: '피리미딘', group: 'heteroring', detail: 'C·T·U 핵염기의 6원 골격', ...aromaticPyrimidine() },
+  purine: { name: '퓨린', group: 'heteroring', detail: 'A·G 핵염기의 융합 방향족 골격', ...aromaticPurine() },
+  adenine: { name: '아데닌 (A)', group: 'nucleobase', detail: '퓨린 핵염기 · N9 첨부 지점', ...purineNucleobase('adenine') },
+  guanine: { name: '구아닌 (G)', group: 'nucleobase', detail: '퓨린 핵염기 · N9 첨부 지점', ...purineNucleobase('guanine') },
+  cytosine: { name: '사이토신 (C)', group: 'nucleobase', detail: '피리미딘 핵염기 · N1 첨부 지점', ...pyrimidineNucleobase('cytosine') },
+  thymine: { name: '티민 (T)', group: 'nucleobase', detail: 'DNA 피리미딘 핵염기 · N1 첨부 지점', ...pyrimidineNucleobase('thymine') },
+  uracil: { name: '유라실 (U)', group: 'nucleobase', detail: 'RNA 피리미딘 핵염기 · N1 첨부 지점', ...pyrimidineNucleobase('uracil') },
   carbonyl: {
     name: '카보닐', group: 'functional', detail: 'C=O 기능기', attachType: 'C_2',
     atoms: [['C', [0, 0, 0], 'C_2'], ['O', [1.23, 0, 0], 'O_2'], ['H', [-0.48, 0.93, 0], 'H_']],
@@ -263,6 +391,14 @@ export const STRUCTURE_LIBRARY = [
   { key: 'pyridine', symbol: 'N⌬', title: '피리딘', group: 'heteroring' },
   { key: 'furan', symbol: 'O⬠', title: '푸란', group: 'heteroring' },
   { key: 'pyrrole', symbol: 'NH⬠', title: '피롤', group: 'heteroring' },
+  { key: 'imidazole', symbol: 'N₂⬠', title: '이미다졸', group: 'heteroring' },
+  { key: 'pyrimidine', symbol: 'N₂⌬', title: '피리미딘', group: 'heteroring' },
+  { key: 'purine', symbol: 'N₄⌬', title: '퓨린', group: 'heteroring' },
+  { key: 'adenine', symbol: 'A', title: '아데닌', group: 'nucleobase' },
+  { key: 'guanine', symbol: 'G', title: '구아닌', group: 'nucleobase' },
+  { key: 'cytosine', symbol: 'C', title: '사이토신', group: 'nucleobase' },
+  { key: 'thymine', symbol: 'T', title: '티민', group: 'nucleobase' },
+  { key: 'uracil', symbol: 'U', title: '유라실', group: 'nucleobase' },
   { key: 'carbonyl', symbol: 'C=O', title: '카보닐', group: 'functional' },
   { key: 'hydroxyl', symbol: '–OH', title: '하이드록실', group: 'functional' },
   { key: 'alkene', symbol: 'C=C', title: '알켄', group: 'functional' },
@@ -319,6 +455,9 @@ export function insertRingTemplate(mol, anchorIdx, template, slotDir, twistDeg =
       mol.atoms[idx].aromaticLonePair = true;
       mol.atoms[idx].aromaticPiContribution = 2;
     }
+    if (template.aromaticFusedAtoms?.includes(templateIndex)) mol.atoms[idx].aromaticFused = true;
+    if (template.aromaticPiContributions?.[templateIndex]) mol.atoms[idx].aromaticPiContribution = template.aromaticPiContributions[templateIndex];
+    if (template.nucleobase) mol.atoms[idx].nucleobase = template.nucleobase;
     return idx;
   });
   for (const [i, j, order] of template.bonds) addBond(mol, idxMap[i], idxMap[j], order);

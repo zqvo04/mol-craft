@@ -205,6 +205,10 @@ export const bondOrderSum = (mol, i) =>
 // 빼야 한다. 일반 C_R·피리딘형 N은 이 보정 대상이 아니다.
 export function valenceUsed(mol, i) {
   const raw = bondOrderSum(mol, i);
+  // 퓨린처럼 융합된 방향족 고리의 공유 원자는 1.5 결합 세 개를 기계적으로 더하면
+  // 4.5가 된다. 이는 공명 평균 결합차수의 표현 방식에서 생기는 중복이므로, 교육용
+  // 템플릿에 한해 π 분획 1.5를 보정해 정상 sp² 원자가로 해석한다.
+  if (mol.atoms[i]?.aromaticFused) return raw - 1.5;
   if (!mol.atoms[i]?.aromaticLonePair) return raw;
   const aromaticCount = mol.bonds.filter((bond) => (bond.i === i || bond.j === i) && bond.order === 1.5).length;
   return raw - aromaticCount * 0.5;

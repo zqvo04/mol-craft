@@ -54,6 +54,51 @@ test('방향족 벤젠의 첨부 탄소는 수소 과잉 없이 결합차수 합
   assert.equal(neighbors(m, idxMap[0]).filter((i) => m.atoms[i].el === 'H').length, 0);
 });
 
+test('이미다졸·피리미딘·퓨린은 생체유기 구조 단위 라이브러리에 평면 방향족 골격으로 제공된다', () => {
+  for (const key of ['imidazole', 'pyrimidine', 'purine']) {
+    const template = RING_TEMPLATES[key];
+    assert.ok(template, `${key} 템플릿 존재`);
+    assert.ok(STRUCTURE_LIBRARY.some((unit) => unit.key === key), `${key} 라이브러리 진입점`);
+    assert.ok(template.atoms.some(([el, , type]) => el === 'N' && type === 'N_R'), `${key} 질소 sp² 타입`);
+    assert.ok(template.bonds.filter(([, , order]) => order === 1.5).length >= 5, `${key} 방향족 결합`);
+  }
+  assert.deepEqual(RING_TEMPLATES.purine.aromaticFusedAtoms, [3, 4]);
+});
+
+test('핵산 카드용 실제 핵염기 다섯 종은 N-글리코사이드 첨부 지점과 태그를 보존한다', () => {
+  for (const key of ['adenine', 'guanine', 'cytosine', 'thymine', 'uracil']) {
+    const template = RING_TEMPLATES[key];
+    assert.equal(template.nucleobase, key);
+    assert.equal(template.atoms[0][0], 'N');
+    assert.equal(template.attachType, 'N_R');
+    assert.ok(STRUCTURE_LIBRARY.some((unit) => unit.key === key));
+  }
+});
+
+test('핵염기 다섯 종은 공명형 sp2 질소·π 결합·첨부 원자 원자가를 함께 만족한다', () => {
+  for (const key of ['adenine', 'guanine', 'cytosine', 'thymine', 'uracil']) {
+    const template = RING_TEMPLATES[key];
+    const internalOrder = template.bonds.filter(([i, j]) => i === 0 || j === 0)
+      .reduce((sum, [, , order]) => sum + (order ?? 1), 0);
+    assert.ok(template.atoms.some(([el, , type]) => el === 'N' && type === 'N_R'), `${key} sp2 질소`);
+    assert.ok(template.bonds.some(([, , order]) => order === 2), `${key} π 결합`);
+    assert.ok(internalOrder + 1 <= MAX_VALENCE.N, `${key} N-글리코사이드 첨부 원자가`);
+  }
+});
+
+test('핵염기 다섯 종은 케쿨레 공명 결합과 sp2 고리 원자 표현을 유지한다', () => {
+  const ringSizes = { adenine: 9, guanine: 9, cytosine: 6, thymine: 6, uracil: 6 };
+  for (const [key, ringSize] of Object.entries(ringSizes)) {
+    const template = RING_TEMPLATES[key];
+    const ringAtoms = template.atoms.slice(0, ringSize);
+    const ringPiBonds = template.bonds.filter(([i, j, order]) => i < ringSize && j < ringSize && order === 2);
+    assert.ok(ringPiBonds.length >= 1, `${key} 고리 내 케쿨레 π 결합`);
+    assert.ok(template.bonds.filter(([, , order]) => order === 2).length >= 3, `${key} 케토형을 포함한 전체 π 결합`);
+    assert.ok(ringAtoms.every(([, , type]) => ['C_R', 'C_2', 'N_R'].includes(type)), `${key} sp2 고리 원자 타입`);
+    assert.ok(ringAtoms.some(([el, , type]) => el === 'N' && type === 'N_R'), `${key} 방향족 질소 타입`);
+  }
+});
+
 test('포화된 앵커는 구조 단위를 붙일 수 없다고 명확히 거부한다', () => {
   const m = createMolecule();
   const c = addAtom(m, 'C', [0, 0, 0]);

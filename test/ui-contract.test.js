@@ -14,6 +14,7 @@ test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 
   assert.match(html, /id="learning-geometry"/);
   assert.match(html, /id="learning-stereo"/);
   assert.match(html, /id="learning-spectroscopy"/);
+  assert.match(html, /id="learning-bioorganic"/);
   assert.match(html, /id="torsion-scan"/);
   assert.match(app, /structureLibrary\.onclick/);
   assert.match(app, /setTool\('ring'\)/);
@@ -26,6 +27,8 @@ test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 
   assert.match(app, /predictedIrBands\(state\.mol\)/);
   assert.match(app, /protonNmrSignals\(state\.mol\)/);
   assert.match(app, /펩타이드 결합의 평면성/);
+  assert.match(app, /5′→3′ 방향성/);
+  assert.match(app, /nucleobaseLabels\(state\.mol\)/);
   assert.match(menuSelect, /createMenuSelect/);
 });
 

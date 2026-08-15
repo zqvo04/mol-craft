@@ -1,5 +1,5 @@
 import { bondBetween, bondOrderSum, branchAtoms, findRings, isTorsionChain, neighbors, setDihedral } from './model.js';
-import { cross, distance, dot, norm, sub, unit } from './geom.js';
+import { cross, dihedralDeg, distance, dot, norm, sub, unit } from './geom.js';
 import { energy, topologyKey, typeAtom } from './uff.js';
 import { UFF_PARAMS } from './params.js';
 import { formula } from './snap.js';
@@ -153,15 +153,59 @@ export function amideSites(mol) {
   return sites;
 }
 
+export function ramachandranRegion(phi, psi) {
+  if (!Number.isFinite(phi) || !Number.isFinite(psi)) return { key: 'incomplete', label: 'φ/ψ가 모두 필요', note: '양쪽 펩타이드 결합이 있는 내부 잔기에서 φ와 ψ를 함께 측정합니다.' };
+  const regions = [
+    { key: 'alpha', label: 'α-나선 유사', phi: -57, psi: -47, note: '교재의 α-나선 중심 부근입니다. 실제 나선 안정화에는 i→i+4 수소결합이 필요합니다.' },
+    { key: 'beta', label: 'β-병풍 유사', phi: -120, psi: 120, note: '교재의 β-병풍 중심 부근입니다. 실제 병풍 안정화에는 가닥 간 수소결합이 필요합니다.' },
+    { key: 'left-alpha', label: '좌손 α-나선 유사', phi: 57, psi: 47, note: '드물게 관찰되는 좌손 α 영역 부근입니다.' },
+  ];
+  const nearest = regions.map((region) => ({ ...region, distance: Math.hypot(phi - region.phi, psi - region.psi) }))
+    .sort((a, b) => a.distance - b.distance)[0];
+  return nearest.distance <= 70 ? nearest : { key: 'other', label: '기타/입체반발 점검', note: '대표 α·β 중심에서 멉니다. 허용성은 곁사슬·용매·전체 구조에 따라 달라집니다.', distance: nearest.distance };
+}
+
+// C(=O)–N–Cα–C(=O)와 N–Cα–C(=O)–N 골격을 찾아 내부 잔기의 φ/ψ를 읽는다.
+// 말단 잔기는 둘 중 하나만 존재할 수 있으므로 φ/ψ 쌍과 라마찬드란 분류를 보류한다.
+export function peptideBackboneTorsions(mol) {
+  const entries = [];
+  for (const amide of amideSites(mol)) {
+    const alpha = neighbors(mol, amide.nitrogen).find((index) => index !== amide.carbon && mol.atoms[index]?.el === 'C');
+    if (alpha === undefined) continue;
+    const nextCarbonyl = neighbors(mol, alpha).find((index) => index !== amide.nitrogen
+      && mol.atoms[index]?.el === 'C' && carbonylOxygen(mol, index));
+    if (nextCarbonyl === undefined) continue;
+    const nextNitrogen = neighbors(mol, nextCarbonyl).find((index) => index !== alpha && mol.atoms[index]?.el === 'N');
+    const phi = dihedralDeg(mol.atoms[amide.carbon].pos, mol.atoms[amide.nitrogen].pos, mol.atoms[alpha].pos, mol.atoms[nextCarbonyl].pos);
+    const psi = nextNitrogen === undefined ? null : dihedralDeg(mol.atoms[amide.nitrogen].pos, mol.atoms[alpha].pos, mol.atoms[nextCarbonyl].pos, mol.atoms[nextNitrogen].pos);
+    entries.push({
+      alpha,
+      previousCarbonyl: amide.carbon,
+      nextCarbonyl,
+      nextNitrogen: nextNitrogen ?? null,
+      phi,
+      psi,
+      region: ramachandranRegion(phi, psi),
+    });
+  }
+  return entries;
+}
+
+export function nucleobaseLabels(mol) {
+  return [...new Set(mol.atoms.map((atom) => atom.nucleobase).filter(Boolean))];
+}
+
 export function predictedIrBands(mol) {
   const bands = [];
   const amides = amideSites(mol);
   const amideCarbons = new Set(amides.map((site) => site.carbon));
   const carbonyls = mol.atoms.map((atom, index) => atom.el === 'C' && carbonylOxygen(mol, index) ? index : -1).filter((index) => index >= 0);
   for (const carbon of carbonyls) {
-    const neighbours = neighbors(mol, carbon);
-    const hasOH = neighbours.some((index) => mol.atoms[index]?.el === 'O' && neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
-    const hasOR = neighbours.some((index) => mol.atoms[index]?.el === 'O' && !neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
+    const singleBondOxygens = incidentBonds(mol, carbon)
+      .filter((bond) => bond.order === 1 && mol.atoms[otherEnd(bond, carbon)]?.el === 'O')
+      .map((bond) => otherEnd(bond, carbon));
+    const hasOH = singleBondOxygens.some((index) => neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
+    const hasOR = singleBondOxygens.some((index) => !neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
     if (amideCarbons.has(carbon)) bands.push({ label: '아마이드 C=O', range: '1630–1690 cm⁻¹', character: '강하고 뾰족', note: 'N 비공유전자쌍의 공명 공여가 C=O 파수를 낮춥니다.' });
     else if (hasOH) bands.push({ label: '카복실산 C=O', range: '1700–1725 cm⁻¹', character: '강하고 뾰족', note: '매우 넓은 산 O–H 밴드와 함께 확인하세요.' });
     else if (hasOR) bands.push({ label: '에스터 C=O', range: '1730–1750 cm⁻¹', character: '강하고 뾰족', note: '공명 정도와 치환기에 따라 위치가 달라집니다.' });

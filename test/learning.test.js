@@ -4,7 +4,8 @@ import { addAtom, addBond, aromatize, createMolecule, valenceUsed } from '../src
 import { loadPreset } from '../src/presets.js';
 import { canBond, slotKinds } from '../src/snap.js';
 import { typeAtom } from '../src/uff.js';
-import { amideSites, aromaticRingSummary, assignEZ, assignRS, axialEquatorialLabels, cipPriorities, compareStructuralIsomerCandidate, degreeOfUnsaturation, findCloseNonbondedContacts, identifyFunctionalGroups, predictedIrBands, protonNmrSignals, scanTorsion, torsionInterpretation } from '../src/learning.js';
+import { amideSites, aromaticRingSummary, assignEZ, assignRS, axialEquatorialLabels, cipPriorities, compareStructuralIsomerCandidate, degreeOfUnsaturation, findCloseNonbondedContacts, identifyFunctionalGroups, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, ramachandranRegion, scanTorsion, torsionInterpretation } from '../src/learning.js';
+import { RING_TEMPLATES, insertRingTemplate } from '../src/presets.js';
 
 test('identifyFunctionalGroups identifies a carbonyl and hydroxyl in acetic acid topology', () => {
   const m = createMolecule();
@@ -143,4 +144,29 @@ test('ethanol-style explicit hydrogens yield a 3:2:1 integral pattern and preser
   assert.equal(nmr.signals.find((signal) => signal.integral === 3).multiplicity, 't');
   assert.equal(nmr.signals.find((signal) => signal.integral === 2).multiplicity, 'q');
   assert.equal(nmr.signals.find((signal) => signal.integral === 1).multiplicity, '넓은 s(교환)');
+});
+
+test('tripeptide backbone exposes an internal residue phi/psi pair for Ramachandran-style observation', () => {
+  const peptide = loadPreset('glycine_tripeptide');
+  assert.equal(typeAtom(peptide, 4), 'N_R');
+  assert.equal(typeAtom(peptide, 8), 'N_R');
+  const torsions = peptideBackboneTorsions(peptide);
+  const internal = torsions.find((entry) => Number.isFinite(entry.phi) && Number.isFinite(entry.psi));
+  const terminal = torsions.find((entry) => entry.psi === null);
+  assert.ok(internal);
+  assert.equal(terminal?.region.key, 'incomplete');
+  assert.ok(['alpha', 'beta', 'left-alpha', 'other'].includes(internal.region.key));
+  assert.equal(ramachandranRegion(-57, -47).key, 'alpha');
+  assert.equal(ramachandranRegion(-120, 120).key, 'beta');
+});
+
+test('nucleic-acid lesson marker appears only after an actual nucleobase template is inserted', () => {
+  const imidazole = createMolecule();
+  const imidazoleAnchor = addAtom(imidazole, 'C', [0, 0, 0]);
+  insertRingTemplate(imidazole, imidazoleAnchor, RING_TEMPLATES.imidazole, [1, 0, 0]);
+  assert.deepEqual(nucleobaseLabels(imidazole), []);
+  const adenine = createMolecule();
+  const adenineAnchor = addAtom(adenine, 'C', [0, 0, 0]);
+  insertRingTemplate(adenine, adenineAnchor, RING_TEMPLATES.adenine, [1, 0, 0]);
+  assert.deepEqual(nucleobaseLabels(adenine), ['adenine']);
 });

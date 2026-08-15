@@ -13,7 +13,7 @@ import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
-import { amideSites, compareStructuralIsomerCandidate, predictedIrBands, protonNmrSignals, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
+import { amideSites, compareStructuralIsomerCandidate, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
 import { createMenuSelect } from './menu-select.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
@@ -351,6 +351,15 @@ function updateLearningPanel() {
     .map(([key, value]) => `<span>${key === 'angle' ? '각 스트레인' : key === 'torsion' ? '비틀림 스트레인' : '입체 반발(vdW)'}</span><b>${value.toFixed(2)}</b>`).join('');
   const axial = summary.axialEquatorial.slice(0, 8).map((entry) => `${state.mol.atoms[entry.carbon].el}${entry.carbon}–${state.mol.atoms[entry.substituent].el}${entry.substituent}: ${entry.kind === 'axial' ? '축(axial)' : '평면(equatorial)'}`).join('<br>');
   $('learning-conformation').innerHTML = `<article class="learning-card concept"><b>UFF 상대 항 분해</b><div class="learning-energy">${strainRows || '<span>스트레인 항</span><b>—</b>'}</div><p>같은 분자의 배좌를 비교할 때만 정성적으로 해석하세요. 문헌 장벽과 UFF 수치는 다를 수 있습니다.</p></article>${axial ? `<article class="learning-card"><b>6원 고리 치환기</b><p>${axial}</p><p>의자형 뒤집기에서는 axial과 equatorial이 서로 교환됩니다.</p></article>` : '<p class="learning-muted">6원 탄소 고리에서 고리 밖 결합을 찾으면 axial/equatorial 라벨을 표시합니다.</p>'}`;
+  const peptideTorsions = peptideBackboneTorsions(state.mol);
+  const peptideBioorganic = peptideTorsions.length
+    ? `${peptideTorsions.map((entry) => `<article class="learning-card concept"><b>Cα${entry.alpha}: φ ${entry.phi.toFixed(0)}° · ${Number.isFinite(entry.psi) ? `ψ ${entry.psi.toFixed(0)}°` : 'ψ —'}</b><p><b>${entry.region.label}</b> · ${entry.region.note}</p></article>`).join('')}<article class="learning-card limit"><b>라마찬드란형 관찰의 한계</b><p>중성 펩타이드 골격의 φ/ψ·vdW 기반 정성 관찰입니다. 쯔비터이온, 수소결합, 용매, 실제 단백질 접힘과 허용 영역의 정량 예측은 이 모델 범위 밖입니다.</p></article>`
+    : '<p class="learning-muted">글리신 트라이펩타이드 골격처럼 두 아마이드 연결을 가진 구조를 불러오면 내부 잔기의 φ/ψ를 관찰합니다.</p>';
+  const nucleobases = nucleobaseLabels(state.mol);
+  const nucleicAcidCard = nucleobases.length
+    ? `<article class="learning-card concept"><b>핵산 염기와 5′→3′ 방향성</b><p>현재 핵염기: <b>${nucleobases.join(' · ')}</b>. 피리미딘·퓨린은 평면 방향족 핵염기의 골격입니다. 뉴클레오타이드 사슬과 서열은 <b>5′ → 3′</b>으로 표기하며, 3′→5′로 뒤집어 읽지 않습니다.</p><p>이 도구는 염기 골격의 기하·방향족성을 다룹니다. 인산의 음전하, A–T 2개/G–C 3개 수소결합 에너지, 염기쌓임, 이중나선 안정성은 정전기·용매 모델이 없어 계산하지 않습니다.</p></article>`
+    : '';
+  $('learning-bioorganic').innerHTML = `${peptideBioorganic}${nucleicAcidCard}`;
   const torsion = selection.length === 4 && isTorsionChain(state.mol, selection) && branchAtoms(state.mol, selection[1], selection[2]) !== null
     ? torsionInterpretation(measure(state.mol, selection))
     : null;
@@ -787,7 +796,7 @@ const structureLibrary = $('structure-library');
 const structureLibraryToggle = $('structure-library-toggle');
 const overlayRoot = $('overlay-root');
 const LIBRARY_GROUPS = [
-  ['ring', '탄소 고리'], ['heteroring', '헤테로고리'], ['functional', '기능기'],
+  ['ring', '탄소 고리'], ['heteroring', '헤테로고리'], ['nucleobase', '핵염기'], ['functional', '기능기'],
 ];
 
 function renderStructureLibrary() {
