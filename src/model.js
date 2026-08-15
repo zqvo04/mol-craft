@@ -1,9 +1,29 @@
 import { distance, angleDeg, dihedralDeg, rotateAround, sub } from './geom.js';
 
+import { MAX_VALENCE } from './params.js';
+
 export const createMolecule = () => ({ atoms: [], bonds: [] });
 
-export function addAtom(mol, el, pos) {
-  mol.atoms.push({ el, pos: [...pos] });
+export const atomCharge = (atom) => Number.isFinite(atom?.charge) ? Math.trunc(atom.charge) : 0;
+
+// 전하는 UFF 에너지 항이 아니라 구조 표현·원자가 검증용 메타데이터다. 대표적인 닫힌껍질
+// 이온만 허용해 CH5 같은 불가능한 구조와 암모늄·카복실레이트를 구분한다.
+export function chargeValenceCap(atom) {
+  const neutral = MAX_VALENCE[atom?.el];
+  const charge = atomCharge(atom);
+  if (neutral === undefined) return undefined;
+  if (atom.el === 'N') return charge > 0 ? 4 : charge < 0 ? 2 : neutral;
+  if (atom.el === 'O') return charge > 0 ? 3 : charge < 0 ? 1 : neutral;
+  if (atom.el === 'C') return charge === 0 ? neutral : 3;
+  if (atom.el === 'S' && charge > 0) return Math.max(neutral, 3);
+  if (atom.el === 'P' && charge > 0) return Math.max(neutral, 4);
+  return neutral;
+}
+
+export const totalCharge = (mol) => mol.atoms.reduce((sum, atom) => sum + atomCharge(atom), 0);
+
+export function addAtom(mol, el, pos, charge = 0) {
+  mol.atoms.push({ el, pos: [...pos], charge: Math.trunc(charge) || 0 });
   return mol.atoms.length - 1;
 }
 
@@ -85,7 +105,10 @@ export function duplicateAtoms(mol, indices) {
   const map = new Map();
   for (const i of indices) {
     const src = mol.atoms[i];
-    map.set(i, addAtom(mol, src.el, [src.pos[0] + 2, src.pos[1], src.pos[2]]));
+    const clone = addAtom(mol, src.el, [src.pos[0] + 2, src.pos[1], src.pos[2]], atomCharge(src));
+    if (src.type) mol.atoms[clone].type = src.type;
+    if (src.nucleobase) mol.atoms[clone].nucleobase = src.nucleobase;
+    map.set(i, clone);
   }
   for (const b of mol.bonds) {
     if (set.has(b.i) && set.has(b.j) && map.get(b.i) !== undefined && map.get(b.j) !== undefined) {

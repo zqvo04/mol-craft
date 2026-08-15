@@ -186,6 +186,16 @@ test('syncHydrogens: 두 번 불러도 결과가 같다(멱등)', () => {
   assert.equal(m.atoms.length, n1);
 });
 
+test('완결된 쯔비터이온은 N+의 네 결합·O−의 한 결합 원자가 규칙을 따른다', () => {
+  const molecule = loadPreset('glycine_zwitterion');
+  assert.equal(implicitH(molecule, 0), 0);
+  assert.equal(implicitH(molecule, 4), 0);
+  syncHydrogens(molecule);
+  assert.equal(implicitH(molecule, 0), 0);
+  assert.equal(implicitH(molecule, 4), 0);
+  assert.equal(formula(molecule), 'C2H5NO2');
+});
+
 const angleBetween = (u, v) => Math.acos(Math.max(-1, Math.min(1, dot(u, v)))) * 180 / Math.PI;
 
 test('openSlots: 결합 1개짜리 탄소는 정사면체 빈 자리 3개를 준다', () => {

@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize, atomCharge,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -13,7 +13,7 @@ import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
-import { amideSites, compareStructuralIsomerCandidate, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
+import { amideSites, compareStructuralIsomerCandidate, electrostaticContacts, formalChargeSummary, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, qualitativePartialCharges, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
 import { createMenuSelect } from './menu-select.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
@@ -161,7 +161,9 @@ let warnAtoms = [];      // [{ i, level }] — 경고 글로우를 띄울 원자
 let warnGlowEls = [];    // 재사용하는 .warnglow div들. 개수가 바뀔 때만 다시 만든다.
 
 function render() {
-  const e = energy(state.mol, cachedTerms(state.mol));
+  const e = state.mol.educationalSketch
+    ? { total: 0, byType: { bond: 0, angle: 0, torsion: 0, vdw: 0 }, perAtom: state.mol.atoms.map(() => 0) }
+    : energy(state.mol, cachedTerms(state.mol));
   state.lastEnergy = e;
   viewer.removeAllModels();
   // removeAllShapes()는 쓰지 않는다 — 붙이기 고스트까지 함께 지워버리기 때문이다.
@@ -210,7 +212,9 @@ function render() {
       center: { x: p[0], y: p[1], z: p[2] }, radius: 0.5, color: '#38bdf8', opacity: 0.4,
     }));
   }
-  const st = stability(state.mol);
+  const st = state.mol.educationalSketch
+    ? { score: 100, issues: [] }
+    : stability(state.mol);
   state.lastStability = st;
   const worst = new Map();
   for (const x of st.issues) {
@@ -287,14 +291,17 @@ document.querySelector('[data-inspector-tabs]').addEventListener('click', (ev) =
 
 function updateLearningPanel() {
   const summary = summarizeStructure(state.mol);
+  const isEducationalSketch = Boolean(state.mol.educationalSketch);
   const hybridization = Object.entries(summary.hybridization)
     .filter(([key]) => key !== '—')
     .map(([key, count]) => `<span class="learning-chip"><b>${key}</b> ${count}개</span>`).join('') || '<span class="learning-muted">현재 원자 타입을 해석할 수 없습니다.</span>';
   const aromatic = summary.aromaticRings.length
     ? `<span class="learning-chip"><b>방향족</b> ${summary.aromaticRings.map((ring) => `${ring.piElectrons}π`).join(' · ')}</span>` : '';
-  $('learning-overview').innerHTML = `<p><b>${summary.atomCount}</b>개 원자 · <b>${summary.bondCount}</b>개 결합 · <b>${summary.degreeOfUnsaturation.formula}</b></p><div class="learning-chip-row">${hybridization}${aromatic}</div>`;
+  $('learning-overview').innerHTML = `<p><b>${summary.atomCount}</b>개 원자 · <b>${summary.bondCount}</b>개 결합 · <b>${isEducationalSketch ? '교육용 골격' : summary.degreeOfUnsaturation.formula}</b></p><div class="learning-chip-row">${hybridization}${aromatic}</div>`;
   const dou = summary.degreeOfUnsaturation;
-  const douText = dou.valid
+  const douText = isEducationalSketch
+    ? '<b>교육용 골격</b> · AMP는 명시적 수소를 완결하지 않은 연결성·인산 전하 관찰용 모식도입니다. 이 구조에는 DoU·분자식 완결성·구조 이성질체 판정을 적용하지 않습니다.'
+    : dou.valid
     ? `<b>DoU ${dou.value}</b> · 고리와 π 결합의 총수입니다. 현재 구조의 결합차수·고리 수와 맞는지 확인하세요.`
     : `<b>DoU ${dou.value}</b> · 수소 수가 완결되지 않았거나 현재 구조가 중성 닫힌껍질 규칙과 맞지 않습니다. 수소 채우기 후 다시 확인하세요.`;
   const aromaticCards = summary.aromaticRings.map((ring) => {
@@ -309,11 +316,16 @@ function updateLearningPanel() {
       : isomer.kind === 'constitutional-isomer-candidate'
         ? `<p><b>구조 이성질체 후보</b> · 두 구조 모두 ${isomer.referenceFormula}이지만 연결성 지문이 다릅니다. 실제 구조 이성질체 판단 전 결합 연결을 다시 확인하세요.</p>`
         : `<p><b>분자식이 다름</b> · 기준 ${isomer.referenceFormula} / 현재 ${isomer.candidateFormula}. 구조 이성질체 비교 대상이 아닙니다.</p>`;
-  $('learning-validation').innerHTML = `<article class="learning-card concept"><p>${douText}</p></article><article class="learning-card"><b>구조 이성질체 점검</b>${isomerStatus}<button class="learning-action" data-isomer-reference>현재 구조를 기준으로 지정</button><p>같은 분자식과 다른 연결성은 구조 이성질체의 단서입니다. 이 판정은 연결성 지문 기반의 학습 보조이며, 그래프 동형 판정이나 입체이성질체 판정은 아닙니다.</p></article>${aromaticCards}`;
+  const formal = formalChargeSummary(state.mol);
+  const chargeCard = `<article class="learning-card concept"><b>형식전하 · 총 ${formal.total > 0 ? '+' : ''}${formal.total}</b><p>${formal.ions.length ? formal.ions.map(({ index, el, charge }) => `${el}${index} ${charge > 0 ? '+' : ''}${charge}`).join(' · ') : '명시한 형식전하가 없습니다. 선택 원자를 고른 뒤 상단 전하 버튼으로 이온 상태를 표시할 수 있습니다.'}</p><p>형식전하는 전자 수 세기의 장부이며, 공명 기여체 하나가 실제 전하 위치·에너지 분포를 단독으로 뜻하지는 않습니다.</p></article>`;
+  const isomerCard = isEducationalSketch ? '' : `<article class="learning-card"><b>구조 이성질체 점검</b>${isomerStatus}<button class="learning-action" data-isomer-reference>현재 구조를 기준으로 지정</button><p>같은 분자식과 다른 연결성은 구조 이성질체의 단서입니다. 이 판정은 연결성 지문 기반의 학습 보조이며, 그래프 동형 판정이나 입체이성질체 판정은 아닙니다.</p></article>`;
+  $('learning-validation').innerHTML = `<article class="learning-card concept"><p>${douText}</p></article>${chargeCard}${isomerCard}${aromaticCards}`;
   const stereo = stereochemicalAssignments(state.mol);
   const rsCards = stereo.rs.map((assignment) => `<article class="learning-card concept"><b>C${assignment.center}: ${assignment.configuration}</b><p>CIP 우선순위 ${assignment.priorities.map(({ priority, element }) => `${priority}.${element}`).join(' → ')}. 최하위 우선순위를 뒤로 둔 3D 부호 계산 결과입니다.</p></article>`).join('');
   const ezCards = stereo.ez.map((assignment) => `<article class="learning-card concept"><b>C${assignment.bond[0]}=C${assignment.bond[1]}: ${assignment.configuration}</b><p>양쪽 탄소에서 CIP 최우선 치환기(C${assignment.leftHigh}, C${assignment.rightHigh})의 상대 위치를 비교했습니다. cis/trans 대신 E/Z를 사용합니다.</p></article>`).join('');
-  $('learning-stereo').innerHTML = `${rsCards || ''}${ezCards || ''}<article class="learning-card limit"><b>판정 경계</b><p>${stereo.rs.length || stereo.ez.length ? 'CIP 동점·고리·동위원소·전하를 완전하게 다루지 못하면 판정을 보류합니다.' : '서로 다른 4개 가지를 갖는 sp³ 탄소 또는 양쪽에 다른 치환기가 있는 C=C를 만들면 판정합니다.'} 광학 회전 (+/−)과 UFF 에너지로 R/S를 예측하지 않습니다.</p></article>`;
+  $('learning-stereo').innerHTML = isEducationalSketch
+    ? '<article class="learning-card limit"><b>교육용 골격의 입체화학 경계</b><p>이 AMP 모식도는 핵염기·리보스·인산의 연결을 읽기 위한 구조입니다. 케쿨레 결합선만으로 핵염기 내부 C=C의 E/Z를 판정하거나 3D 좌표로 R/S를 해석하지 않습니다.</p></article>'
+    : `${rsCards || ''}${ezCards || ''}<article class="learning-card limit"><b>판정 경계</b><p>${stereo.rs.length || stereo.ez.length ? 'CIP 동점·고리·동위원소·전하를 완전하게 다루지 못하면 판정을 보류합니다.' : '서로 다른 4개 가지를 갖는 sp³ 탄소 또는 양쪽에 다른 치환기가 있는 C=C를 만들면 판정합니다.'} 광학 회전 (+/−)과 UFF 에너지로 R/S를 예측하지 않습니다.</p></article>`;
   const candidateCenters = (state.selection.length ? state.selection : state.mol.atoms.map((_, i) => i))
     .filter((index) => neighbors(state.mol, index).length >= 2)
     .slice(0, 3);
@@ -329,8 +341,12 @@ function updateLearningPanel() {
     : '<p class="learning-muted">결합이 2개 이상인 원자를 선택하면 혼성화와 결합 기하를 설명합니다.</p>';
   const amides = amideSites(state.mol);
   const amideCards = amides.map((site) => `<article class="learning-card concept"><b>펩타이드 결합의 평면성 · C${site.carbon}–N${site.nitrogen}</b><p>아마이드 N 비공유전자쌍의 공명 공여로 C–N 결합은 부분 이중결합 성격을 가집니다. 단백질에서 같은 아마이드 연결이 펩타이드 결합이며, O${site.oxygen}–C${site.carbon}–N${site.nitrogen} 평면성이 φ/ψ 회전의 출발점입니다.</p><p>모델은 N_R·평면 기하를 적용하지만, 15–20 kcal/mol 장벽의 정량값·수소결합·2차 구조 안정성은 예측하지 않습니다.</p></article>`).join('');
-  $('learning-geometry').innerHTML = `${geometryCards}${amideCards}`;
-  $('learning-groups').innerHTML = summary.groups.length
+  $('learning-geometry').innerHTML = isEducationalSketch
+    ? '<article class="learning-card limit"><b>교육용 골격의 기하 경계</b><p>이 프리셋은 최적화 좌표·VSEPR 편차를 해석하지 않습니다. 혼성화 칩과 방향족 골격은 정성적 연결성 읽기에만 사용하세요.</p></article>'
+    : `${geometryCards}${amideCards}`;
+  $('learning-groups').innerHTML = isEducationalSketch
+    ? '<article class="learning-card"><b>AMP 연결성 읽기</b><p>아데닌 염기–리보스–5′ 인산의 연결과 인산 산소의 형식전하를 관찰하세요. 방향족 케쿨레 결합선은 독립 알켄 반응성 예측에 쓰지 않습니다.</p></article>'
+    : summary.groups.length
     ? summary.groups.map((group) => `<article class="learning-card"><b>${group.label}</b><p>${group.note}</p></article>`).join('')
     : '<p class="learning-muted">인식한 주요 기능기가 없습니다. 구조 단위 라이브러리에서 카보닐·하이드록실·알켄을 붙여 보세요.</p>';
   const ir = predictedIrBands(state.mol);
@@ -341,16 +357,25 @@ function updateLearningPanel() {
   const nmrCard = nmr.supported
     ? `<article class="learning-card"><b>¹H NMR 신호군 · 적분비</b><p>${nmr.signals.map((signal) => `신호 ${signal.id}: ${signal.integral}H · <b>${signal.multiplicity}</b>`).join('<br>')}</p><p>${nmr.note} n+1은 등가 이웃 H에만 적용하며, 비등가 집합은 dd·ddd처럼 복합으로 표시합니다.</p></article>`
     : `<article class="learning-card"><b>¹H NMR 신호군</b><p>${nmr.note}</p></article>`;
-  $('learning-spectroscopy').innerHTML = `${irCard}${nmrCard}`;
-  $('learning-contacts').innerHTML = summary.contacts.length
-    ? summary.contacts.map((contact) => `<article class="learning-card contact"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.distance.toFixed(2)} Å — UFF vdW 기준의 ${(contact.ratio * 100).toFixed(0)}%입니다. 가까운 비결합 접촉은 입체장애의 단서가 될 수 있습니다.</p></article>`).join('')
-    : '<p class="learning-muted">강한 근접 비결합 접촉이 없습니다. 이는 반응성이나 안정성을 완전히 예측하는 결과는 아닙니다.</p>';
+  $('learning-spectroscopy').innerHTML = isEducationalSketch
+    ? '<article class="learning-card limit"><b>분광학 적용 범위</b><p>AMP 교육용 골격은 명시적 수소와 완결된 결합차수를 제공하지 않으므로 IR·¹H NMR 예측을 표시하지 않습니다.</p></article>'
+    : `${irCard}${nmrCard}`;
+  const electro = electrostaticContacts(state.mol).slice(0, 4);
+  const partial = qualitativePartialCharges(state.mol).filter((entry) => Math.abs(entry.charge) >= 0.15).slice(0, 5);
+  const electroCards = electro.map((contact) => `<article class="learning-card concept"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.kind === 'attraction' ? '반대 부호의 정성적 끌림 단서' : '같은 부호의 정성적 밀어냄 단서'} · ${contact.distance.toFixed(2)} Å</p></article>`).join('');
+  const partialCard = partial.length ? `<article class="learning-card"><b>정성 부분전하</b><p>${partial.map((entry) => `${entry.el}${entry.index} ${entry.charge > 0 ? 'δ+' : 'δ−'}${Math.abs(entry.charge).toFixed(2)}`).join(' · ')}</p><p>결합 전기음성도 차이만 쓴 시각적 단서입니다. 전하 모형·용매·구조 최적화는 계산하지 않습니다.</p></article>` : '';
+  const vdwCards = summary.contacts.length ? summary.contacts.map((contact) => `<article class="learning-card contact"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.distance.toFixed(2)} Å — UFF vdW 기준의 ${(contact.ratio * 100).toFixed(0)}%입니다. 가까운 비결합 접촉은 입체장애의 단서가 될 수 있습니다.</p></article>`).join('') : '';
+  $('learning-contacts').innerHTML = isEducationalSketch
+    ? `${partialCard}<article class="learning-card limit"><b>접촉 해석 경계</b><p>교육용 좌표에는 정전기 쌍·UFF vdW 충돌을 적용하지 않습니다. 인산의 음전하 위치만 정성적으로 읽으세요.</p></article>`
+    : `${partialCard}${electroCards}${vdwCards}` || '<p class="learning-muted">강한 정전기·입체 비결합 단서가 없습니다. 이는 반응성이나 안정성을 완전히 예측하는 결과는 아닙니다.</p>';
   const selection = state.selection;
   const strainRows = Object.entries(state.lastEnergy?.byType ?? {})
     .filter(([key]) => ['angle', 'torsion', 'vdw'].includes(key))
     .map(([key, value]) => `<span>${key === 'angle' ? '각 스트레인' : key === 'torsion' ? '비틀림 스트레인' : '입체 반발(vdW)'}</span><b>${value.toFixed(2)}</b>`).join('');
   const axial = summary.axialEquatorial.slice(0, 8).map((entry) => `${state.mol.atoms[entry.carbon].el}${entry.carbon}–${state.mol.atoms[entry.substituent].el}${entry.substituent}: ${entry.kind === 'axial' ? '축(axial)' : '평면(equatorial)'}`).join('<br>');
-  $('learning-conformation').innerHTML = `<article class="learning-card concept"><b>UFF 상대 항 분해</b><div class="learning-energy">${strainRows || '<span>스트레인 항</span><b>—</b>'}</div><p>같은 분자의 배좌를 비교할 때만 정성적으로 해석하세요. 문헌 장벽과 UFF 수치는 다를 수 있습니다.</p></article>${axial ? `<article class="learning-card"><b>6원 고리 치환기</b><p>${axial}</p><p>의자형 뒤집기에서는 axial과 equatorial이 서로 교환됩니다.</p></article>` : '<p class="learning-muted">6원 탄소 고리에서 고리 밖 결합을 찾으면 axial/equatorial 라벨을 표시합니다.</p>'}`;
+  $('learning-conformation').innerHTML = isEducationalSketch
+    ? '<article class="learning-card limit"><b>배좌·스트레인 적용 범위</b><p>AMP 교육용 골격에는 UFF 상대 에너지, 비틀림 장벽, vdW 접촉, axial/equatorial 판정을 적용하지 않습니다.</p></article>'
+    : `<article class="learning-card concept"><b>UFF 상대 항 분해</b><div class="learning-energy">${strainRows || '<span>스트레인 항</span><b>—</b>'}</div><p>같은 분자의 배좌를 비교할 때만 정성적으로 해석하세요. 문헌 장벽과 UFF 수치는 다를 수 있습니다.</p></article>${axial ? `<article class="learning-card"><b>6원 고리 치환기</b><p>${axial}</p><p>의자형 뒤집기에서는 axial과 equatorial이 서로 교환됩니다.</p></article>` : '<p class="learning-muted">6원 탄소 고리에서 고리 밖 결합을 찾으면 axial/equatorial 라벨을 표시합니다.</p>'}`;
   const peptideTorsions = peptideBackboneTorsions(state.mol);
   const peptideBioorganic = peptideTorsions.length
     ? `${peptideTorsions.map((entry) => `<article class="learning-card concept"><b>Cα${entry.alpha}: φ ${entry.phi.toFixed(0)}° · ${Number.isFinite(entry.psi) ? `ψ ${entry.psi.toFixed(0)}°` : 'ψ —'}</b><p><b>${entry.region.label}</b> · ${entry.region.note}</p></article>`).join('')}<article class="learning-card limit"><b>라마찬드란형 관찰의 한계</b><p>중성 펩타이드 골격의 φ/ψ·vdW 기반 정성 관찰입니다. 쯔비터이온, 수소결합, 용매, 실제 단백질 접힘과 허용 영역의 정량 예측은 이 모델 범위 밖입니다.</p></article>`
@@ -359,8 +384,9 @@ function updateLearningPanel() {
   const nucleicAcidCard = nucleobases.length
     ? `<article class="learning-card concept"><b>핵산 염기와 5′→3′ 방향성</b><p>현재 핵염기: <b>${nucleobases.join(' · ')}</b>. 피리미딘·퓨린은 평면 방향족 핵염기의 골격입니다. 뉴클레오타이드 사슬과 서열은 <b>5′ → 3′</b>으로 표기하며, 3′→5′로 뒤집어 읽지 않습니다.</p><p>이 도구는 염기 골격의 기하·방향족성을 다룹니다. 인산의 음전하, A–T 2개/G–C 3개 수소결합 에너지, 염기쌓임, 이중나선 안정성은 정전기·용매 모델이 없어 계산하지 않습니다.</p></article>`
     : '';
-  $('learning-bioorganic').innerHTML = `${peptideBioorganic}${nucleicAcidCard}`;
-  const torsion = selection.length === 4 && isTorsionChain(state.mol, selection) && branchAtoms(state.mol, selection[1], selection[2]) !== null
+  const reactivityBoundary = `<article class="learning-card limit"><b>반응성 예측의 경계</b><p>pKa, 친핵성·친전자성의 순위, 전이상태, 반응 경로, 수율과 활성화 장벽은 현 UFF·정성 전하 모델로 계산하지 않습니다. 구조·형식전하·전자 분포의 추론 연습과 정량 반응성 예측을 구분하세요.</p></article>`;
+  $('learning-bioorganic').innerHTML = `${peptideBioorganic}${nucleicAcidCard}${reactivityBoundary}`;
+  const torsion = !isEducationalSketch && selection.length === 4 && isTorsionChain(state.mol, selection) && branchAtoms(state.mol, selection[1], selection[2]) !== null
     ? torsionInterpretation(measure(state.mol, selection))
     : null;
   $('torsion-study').innerHTML = torsion
@@ -378,10 +404,41 @@ document.addEventListener('click', (event) => {
   render();
 });
 
+function changeSelectedCharge(nextCharge) {
+  if (state.selection.length !== 1) { toast('전하를 바꿀 원자 하나를 선택하세요', 'err'); return; }
+  if (!Number.isInteger(nextCharge) || nextCharge < -2 || nextCharge > 2) { toast('교육용 전하 범위는 −2부터 +2입니다', 'err'); return; }
+  pushUndo();
+  const atom = state.mol.atoms[state.selection[0]];
+  atom.charge = nextCharge;
+  toast(`${atom.el}${state.selection[0]} 형식전하 ${nextCharge > 0 ? '+' : ''}${nextCharge}`);
+  render();
+}
+
+$('charge-minus').addEventListener('click', () => {
+  if (state.selection.length === 1) changeSelectedCharge(atomCharge(state.mol.atoms[state.selection[0]]) - 1);
+  else changeSelectedCharge(null);
+});
+$('charge-plus').addEventListener('click', () => {
+  if (state.selection.length === 1) changeSelectedCharge(atomCharge(state.mol.atoms[state.selection[0]]) + 1);
+  else changeSelectedCharge(null);
+});
+$('charge-reset').addEventListener('click', () => changeSelectedCharge(0));
+
 const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: '비틀림', vdw: '반데르발스' };
 
 // 총에너지 · 항별 막대 · 선택 측정값 · VSEPR 이상각 만족 여부를 패널에 반영한다.
 function updatePanels(e) {
+  if (state.mol.educationalSketch) {
+    $('total').textContent = '— (교육용 골격)';
+    $('breakdown').innerHTML = '<p class="learning-muted">AMP 단량체는 핵염기·리보스·5′ 인산의 연결과 전하를 읽는 구조 골격입니다. UFF 에너지·안정성·충돌은 계산하지 않습니다.</p>';
+    $('warn').textContent = '교육용 골격: pKa·용매화·염기쌓임·이중나선 안정성은 해석하지 않습니다.';
+    $('measure').textContent = '교육용 골격에서는 정량 측정을 해석하지 않습니다';
+    $('vsepr').textContent = '교육용 골격 — UFF 기하 판정 제외';
+    $('stability').innerHTML = '<span class="learning-muted">교육용 골격 — 안정성 점수 제외</span>';
+    updateDihedralPanel();
+    updateLearningPanel();
+    return;
+  }
   $('total').textContent = `${e.total.toFixed(2)} kcal/mol`;
 
   const max = Math.max(...Object.values(e.byType).map(Math.abs), 0.01);
@@ -664,7 +721,12 @@ function download(text, name) {
 for (const [id, fn, ext] of [
   ['export-xyz', toXYZ, 'xyz'], ['export-mol', toMolBlock, 'mol'], ['export-pdb', toPDB, 'pdb'],
 ]) {
-  $(id).onclick = () => download(fn(state.mol), `mol-craft.${ext}`);
+  $(id).onclick = () => {
+    const hasCharge = state.mol.atoms.some((atom) => atomCharge(atom) !== 0);
+    if (hasCharge && ext === 'xyz') toast('XYZ는 형식전하 칼럼이 없어 주석에만 기록합니다. 전하 보존은 MOL 또는 공유 링크를 사용하세요');
+    if (hasCharge && ext === 'pdb') toast('PDB는 형식전하를 2글자 표기로만 기록합니다. 전하 보존은 MOL 또는 공유 링크를 권장합니다');
+    download(fn(state.mol), `mol-craft.${ext}`);
+  };
 }
 
 $('share').onclick = async () => {

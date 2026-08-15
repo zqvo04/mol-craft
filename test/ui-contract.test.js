@@ -6,8 +6,8 @@ const root = new URL('..', import.meta.url);
 const source = async (relative) => readFile(new URL(relative, root), 'utf8');
 
 test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 코드에 함께 존재한다', async () => {
-  const [html, app, catalogCss, menuSelect] = await Promise.all([
-    source('index.html'), source('src/app.js'), source('src/catalog.css'), source('src/menu-select.js'),
+  const [html, app, catalogCss, menuSelect, learning] = await Promise.all([
+    source('index.html'), source('src/app.js'), source('src/catalog.css'), source('src/menu-select.js'), source('src/learning.js'),
   ]);
   assert.match(html, /id="structure-library-toggle"/);
   assert.match(html, /id="learning-panel"/);
@@ -29,6 +29,15 @@ test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 
   assert.match(app, /펩타이드 결합의 평면성/);
   assert.match(app, /5′→3′ 방향성/);
   assert.match(app, /nucleobaseLabels\(state\.mol\)/);
+  assert.match(app, /formalChargeSummary\(state\.mol\)/);
+  assert.match(app, /electrostaticContacts\(state\.mol\)/);
+  assert.match(app, /반응성 예측의 경계/);
+  assert.match(app, /educationalSketch/);
+  assert.match(app, /이 구조에는 DoU·분자식 완결성·구조 이성질체 판정을 적용하지 않습니다/);
+  assert.match(app, /교육용 좌표에는 정전기 쌍·UFF vdW 충돌을 적용하지 않습니다/);
+  assert.match(learning, /카복실레이트 COO⁻/);
+  assert.match(html, /id="charge-minus"/);
+  assert.match(html, /id="charge-plus"/);
   assert.match(menuSelect, /createMenuSelect/);
 });
 

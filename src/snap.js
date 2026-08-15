@@ -1,5 +1,5 @@
 import {
-  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom, valenceUsed,
+  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom, valenceUsed, atomCharge, chargeValenceCap,
 } from './model.js';
 import { MAX_VALENCE, EXPANDED_VALENCE, UFF_PARAMS } from './params.js';
 import { typeAtom, bondLength } from './uff.js';
@@ -20,6 +20,15 @@ export const IDEAL_ANGLES = {
 
 // 정상 원자가 상태의 비공유 전자쌍 수(형식 전하 없는 중성 원자 기준).
 export const LONE_PAIRS = { H: 0, B: 0, C: 0, N: 1, O: 2, F: 3, Si: 0, P: 1, S: 2, Cl: 3, Br: 3, I: 3 };
+
+function lonePairCount(mol, i) {
+  const atom = mol.atoms[i];
+  const neutral = LONE_PAIRS[atom.el] ?? 0;
+  if (atom.el === 'N' && atomCharge(atom) > 0) return 0;
+  if (atom.el === 'O' && atomCharge(atom) < 0) return 3;
+  if (atom.el === 'O' && atomCharge(atom) > 0) return 1;
+  return neutral;
+}
 
 // 전자 도메인 수(결합 자리 + 비공유 전자쌍) = idealDirection이 조준할 실제 VSEPR 형상.
 // MAX_VALENCE만 쓰면 물(O, 결합 2개)이 배위수 2 취급되어 직선(180°)으로 붙는다 — 산소는
@@ -42,10 +51,10 @@ export const ELECTRON_DOMAINS = Object.fromEntries(
 export function electronDomains(mol, i) {
   const el = mol.atoms[i].el;
   const nb = neighbors(mol, i).length;
-  const max = MAX_VALENCE[el];
+  const max = chargeValenceCap(mol.atoms[i]);
   if (max === undefined) return nb + 1;
   const piBonds = bondOrderSum(mol, i) - nb;
-  return Math.max(1, max - piBonds + (LONE_PAIRS[el] ?? 0));
+  return Math.max(1, max - piBonds + lonePairCount(mol, i));
 }
 
 // 원자가 상한을 넘는 결합은 차단한다. 상한은 EXPANDED_VALENCE(있으면) 또는 MAX_VALENCE다 —
@@ -64,7 +73,7 @@ export function canBond(mol, i, j) {
   for (const idx of [i, j]) {
     const el = mol.atoms[idx].el;
     const used = valenceUsed(mol, idx);
-    const normal = MAX_VALENCE[el];
+    const normal = chargeValenceCap(mol.atoms[idx]);
     const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
     // 상한을 넘는 결합은 실제 화학에서 불가능하다(H가 결합 2개, 탄소가 5개 등) —
@@ -87,7 +96,7 @@ export function cycleBondOrder(mol, bond) {
   if (delta > 0) {
     for (const idx of [bond.i, bond.j]) {
       const el = mol.atoms[idx].el;
-      const normal = MAX_VALENCE[el];
+      const normal = chargeValenceCap(mol.atoms[idx]);
       if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
       const capMax = EXPANDED_VALENCE[el] ?? normal;
       if (valenceUsed(mol, idx) + delta > capMax) return { ok: false, reason: 'valence-full' };
@@ -289,13 +298,13 @@ function antiRef(mol, neighborIdx, anchor, axis) {
 // 정상적으로 떨어진다 — kind는 색을 강제하는 경우(lonepair=보라)만 특별 취급하면 된다.
 export function slotKinds(mol, anchor) {
   const el = mol.atoms[anchor].el;
-  const normal = MAX_VALENCE[el];
+  const normal = chargeValenceCap(mol.atoms[anchor]);
   const capMax = EXPANDED_VALENCE[el] ?? normal;
   const room = capMax === undefined ? 0 : Math.max(0, capMax - valenceUsed(mol, anchor));
   // 피롤형 N·푸란형 O의 비공유전자쌍은 방향족 π계에 이미 공여되어 '붙일 수 없는
   // 보라색 비공유전자쌍 슬롯'으로 다시 그리면 안 된다. 결합 시도는 valence-full로
   // 일관되게 막고, 학습 노트의 방향족 카드가 그 전자쌍의 역할을 설명한다.
-  const lonePairSlots = mol.atoms[anchor].aromaticLonePair ? 0 : (LONE_PAIRS[el] ?? 0);
+  const lonePairSlots = mol.atoms[anchor].aromaticLonePair ? 0 : lonePairCount(mol, anchor);
   return openSlots(mol, anchor).map((dir, k) => ({
     dir, kind: k >= room && k < room + lonePairSlots ? 'lonepair' : 'bond',
   }));
@@ -320,7 +329,7 @@ export function stability(mol) {
     // 직접 재계산해 경고한다. capMax(EXPANDED_VALENCE)까지는 초원자가로 약한 경고,
     // 그마저 넘기면(예: CH5) 위험으로 표시한다.
     const used = valenceUsed(mol, i);
-    const normal = MAX_VALENCE[el];
+    const normal = chargeValenceCap(mol.atoms[i]);
     const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal !== undefined && used > capMax) {
       issues.push({ atom: i, level: 'danger', msg: `${el}${i} 원자가 초과(${used}/${capMax})` });
@@ -366,7 +375,7 @@ export function hudSummary(st, max = 3) {
 // H 결합까지 포함해 실제 사용 원자가를 그대로 반영하므로, 원소별 채워야 할 나머지가
 // 바로 나온다(음수면 원자가 초과 — syncHydrogens가 그만큼 뗀다).
 export function implicitH(mol, i) {
-  const max = MAX_VALENCE[mol.atoms[i].el];
+  const max = chargeValenceCap(mol.atoms[i]);
   return max === undefined ? 0 : max - valenceUsed(mol, i);
 }
 

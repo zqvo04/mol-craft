@@ -3,6 +3,7 @@ import { cross, dihedralDeg, distance, dot, norm, sub, unit } from './geom.js';
 import { energy, topologyKey, typeAtom } from './uff.js';
 import { UFF_PARAMS } from './params.js';
 import { formula } from './snap.js';
+import { atomCharge, totalCharge } from './model.js';
 
 const hybridizationFromType = (type) => {
   if (type?.endsWith('_1')) return 'sp';
@@ -195,6 +196,46 @@ export function nucleobaseLabels(mol) {
   return [...new Set(mol.atoms.map((atom) => atom.nucleobase).filter(Boolean))];
 }
 
+const ELECTRONEGATIVITY = { H: 2.20, B: 2.04, C: 2.55, N: 3.04, O: 3.44, F: 3.98, P: 2.19, S: 2.58, Cl: 3.16, Br: 2.96, I: 2.66 };
+
+// 여기서의 전하는 사용자가 명시한 형식전하다. 전자 구조를 풀어 새로 '계산'하지 않으며,
+// 공명 기여체나 용액에서의 실제 전하 분포와 혼동하지 않도록 학습 카드가 경계를 표시한다.
+export function formalChargeSummary(mol) {
+  const ions = mol.atoms.map((atom, index) => ({ index, el: atom.el, charge: atomCharge(atom) }))
+    .filter(({ charge }) => charge !== 0);
+  return { total: totalCharge(mol), ions };
+}
+
+export function qualitativePartialCharges(mol) {
+  const values = mol.atoms.map((atom) => atomCharge(atom));
+  for (const bond of mol.bonds) {
+    const left = ELECTRONEGATIVITY[mol.atoms[bond.i]?.el] ?? 0;
+    const right = ELECTRONEGATIVITY[mol.atoms[bond.j]?.el] ?? 0;
+    const shift = (right - left) * 0.12 * bond.order;
+    values[bond.i] += shift;
+    values[bond.j] -= shift;
+  }
+  return values.map((charge, index) => ({ index, el: mol.atoms[index].el, charge: Math.round(charge * 100) / 100 }));
+}
+
+export function electrostaticContacts(mol, cutoff = 4.5) {
+  const charges = qualitativePartialCharges(mol);
+  const contacts = [];
+  for (let i = 0; i < mol.atoms.length; i++) {
+    const oneBond = new Set(neighbors(mol, i));
+    const twoBond = new Set([...oneBond].flatMap((middle) => neighbors(mol, middle)));
+    for (let j = i + 1; j < mol.atoms.length; j++) {
+      if (oneBond.has(j) || twoBond.has(j)) continue;
+      const d = distance(mol.atoms[i].pos, mol.atoms[j].pos);
+      if (d > cutoff) continue;
+      const qProduct = charges[i].charge * charges[j].charge;
+      if (Math.abs(qProduct) < 0.015) continue;
+      contacts.push({ i, j, distance: d, qProduct, kind: qProduct < 0 ? 'attraction' : 'repulsion' });
+    }
+  }
+  return contacts.sort((a, b) => Math.abs(b.qProduct / b.distance) - Math.abs(a.qProduct / a.distance));
+}
+
 export function predictedIrBands(mol) {
   const bands = [];
   const amides = amideSites(mol);
@@ -205,8 +246,10 @@ export function predictedIrBands(mol) {
       .filter((bond) => bond.order === 1 && mol.atoms[otherEnd(bond, carbon)]?.el === 'O')
       .map((bond) => otherEnd(bond, carbon));
     const hasOH = singleBondOxygens.some((index) => neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
+    const hasOminus = singleBondOxygens.some((index) => atomCharge(mol.atoms[index]) < 0);
     const hasOR = singleBondOxygens.some((index) => !neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
     if (amideCarbons.has(carbon)) bands.push({ label: '아마이드 C=O', range: '1630–1690 cm⁻¹', character: '강하고 뾰족', note: 'N 비공유전자쌍의 공명 공여가 C=O 파수를 낮춥니다.' });
+    else if (hasOminus) bands.push({ label: '카복실레이트 COO⁻', range: '1550–1650 / 1300–1420 cm⁻¹', character: '두 개의 강한 밴드', note: '비대칭·대칭 신축을 함께 봅니다. 한 개의 에스터 C=O 밴드로 해석하지 않습니다.' });
     else if (hasOH) bands.push({ label: '카복실산 C=O', range: '1700–1725 cm⁻¹', character: '강하고 뾰족', note: '매우 넓은 산 O–H 밴드와 함께 확인하세요.' });
     else if (hasOR) bands.push({ label: '에스터 C=O', range: '1730–1750 cm⁻¹', character: '강하고 뾰족', note: '공명 정도와 치환기에 따라 위치가 달라집니다.' });
     else bands.push({ label: '카보닐 C=O', range: '1670–1780 cm⁻¹', character: '강하고 뾰족', note: '유도체·콘주게이션에 따라 범위를 좁혀야 합니다.' });

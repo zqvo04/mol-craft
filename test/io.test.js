@@ -66,3 +66,29 @@ test('무압축 구형 링크도 계속 열린다 (하위 호환)', async () => 
 test('압축 문자열이 URL 안전 문자만 포함한다', async () => {
   assert.match(await encodeStateAsync(loadPreset('methane')), /^z[A-Za-z0-9\-_]+$/);
 });
+
+test('형식전하와 핵염기 태그가 동기·압축 공유 상태에서 보존된다', async () => {
+  const molecule = loadPreset('amp_5mp');
+  const plain = decodeState(encodeState(molecule));
+  const packed = await decodeStateAsync(await encodeStateAsync(molecule));
+  assert.deepEqual(plain.atoms.map((atom) => atom.charge), molecule.atoms.map((atom) => atom.charge));
+  assert.equal(plain.atoms[0].nucleobase, 'adenine');
+  assert.deepEqual(packed.atoms.map((atom) => atom.charge), molecule.atoms.map((atom) => atom.charge));
+});
+
+test('구형 무전하 상태는 charge 0으로 계속 열린다', () => {
+  const legacy = btoa(JSON.stringify({ a: [['O', 0, 0, 0]], b: [] })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  assert.equal(decodeState(legacy).atoms[0].charge, 0);
+});
+
+test('MOL V2000 내보내기는 명시 형식전하를 M  CHG 레코드에 기록한다', () => {
+  const mol = toMolBlock(loadPreset('glycine_zwitterion'));
+  assert.match(mol, /M  CHG\s+2\s+1\s+1\s+5\s+-1/);
+});
+
+test('XYZ는 전하를 주석으로만 밝히고 PDB는 제한된 formal charge 열에 기록한다', () => {
+  const molecule = loadPreset('glycine_zwitterion');
+  assert.match(toXYZ(molecule), /comment only; use MOL\/share for machine-readable charges/);
+  const chargedPdbRows = toPDB(molecule).split('\n').filter((line) => line.startsWith('HETATM') && /[1][+-]$/.test(line));
+  assert.equal(chargedPdbRows.length, 2);
+});

@@ -4,7 +4,7 @@ import { addAtom, addBond, aromatize, createMolecule, valenceUsed } from '../src
 import { loadPreset } from '../src/presets.js';
 import { canBond, slotKinds } from '../src/snap.js';
 import { typeAtom } from '../src/uff.js';
-import { amideSites, aromaticRingSummary, assignEZ, assignRS, axialEquatorialLabels, cipPriorities, compareStructuralIsomerCandidate, degreeOfUnsaturation, findCloseNonbondedContacts, identifyFunctionalGroups, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, ramachandranRegion, scanTorsion, torsionInterpretation } from '../src/learning.js';
+import { amideSites, aromaticRingSummary, assignEZ, assignRS, axialEquatorialLabels, cipPriorities, compareStructuralIsomerCandidate, degreeOfUnsaturation, electrostaticContacts, findCloseNonbondedContacts, formalChargeSummary, identifyFunctionalGroups, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, qualitativePartialCharges, ramachandranRegion, scanTorsion, torsionInterpretation } from '../src/learning.js';
 import { RING_TEMPLATES, insertRingTemplate } from '../src/presets.js';
 
 test('identifyFunctionalGroups identifies a carbonyl and hydroxyl in acetic acid topology', () => {
@@ -169,4 +169,22 @@ test('nucleic-acid lesson marker appears only after an actual nucleobase templat
   const adenineAnchor = addAtom(adenine, 'C', [0, 0, 0]);
   insertRingTemplate(adenine, adenineAnchor, RING_TEMPLATES.adenine, [1, 0, 0]);
   assert.deepEqual(nucleobaseLabels(adenine), ['adenine']);
+});
+
+test('zwitterion formal charges and qualitative electrostatic contacts stay separate from UFF energy', () => {
+  const glycine = loadPreset('glycine_zwitterion');
+  const formal = formalChargeSummary(glycine);
+  assert.equal(formal.total, 0);
+  assert.deepEqual(formal.ions.map((ion) => ion.charge), [1, -1]);
+  assert.ok(qualitativePartialCharges(glycine).some((entry) => entry.charge < -0.5));
+  assert.ok(electrostaticContacts(glycine).some((contact) => contact.kind === 'attraction'));
+  assert.ok(predictedIrBands(glycine).some((band) => band.label === '카복실레이트 COO⁻'));
+  assert.equal(predictedIrBands(glycine).some((band) => band.label === '에스터 C=O'), false);
+});
+
+test('AMP monophosphate keeps an adenine lesson tag and phosphate formal charge', () => {
+  const amp = loadPreset('amp_5mp');
+  assert.deepEqual(nucleobaseLabels(amp), ['adenine']);
+  assert.equal(formalChargeSummary(amp).total, -2);
+  assert.equal(formalChargeSummary(amp).ions.filter((ion) => ion.el === 'O').length, 2);
 });

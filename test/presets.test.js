@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMolecule, addAtom, addBond, neighbors, branchAtoms, bondOrderSum } from '../src/model.js';
-import { RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, validateStructureAttachment } from '../src/presets.js';
+import { RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, loadPreset, validateStructureAttachment } from '../src/presets.js';
 import { MAX_VALENCE } from '../src/params.js';
 import { energy } from '../src/uff.js';
 
@@ -117,4 +117,10 @@ test('구조 단위의 회전 미리보기는 앵커 거리와 원자 수를 유
   assert.equal(base.length, turned.length);
   assert.ok(Math.abs(base[0][1][0] - turned[0][1][0]) < 1e-8);
   assert.notDeepEqual(base[1][1], turned[1][1]);
+});
+
+test('AMP는 전하를 보존하는 비-UFF 교육용 골격으로 명시된다', () => {
+  const amp = loadPreset('amp_5mp');
+  assert.equal(amp.educationalSketch, true);
+  assert.equal(amp.atoms.filter((atom) => atom.charge === -1).length, 2);
 });

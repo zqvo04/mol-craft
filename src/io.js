@@ -1,7 +1,12 @@
 const f4 = (x) => x.toFixed(4).padStart(10);
 
 export function toXYZ(mol, comment = 'mol-craft') {
-  const lines = [String(mol.atoms.length), comment];
+  const charged = mol.atoms.map((atom, index) => ({ index, charge: Number.isFinite(atom.charge) ? Math.trunc(atom.charge) : 0 }))
+    .filter(({ charge }) => charge !== 0);
+  const chargeNote = charged.length
+    ? ` | formal charges: ${charged.map(({ index, charge }) => `${index + 1}${charge > 0 ? '+' : ''}${charge}`).join(', ')} (comment only; use MOL/share for machine-readable charges)`
+    : '';
+  const lines = [String(mol.atoms.length), `${comment}${chargeNote}`];
   for (const a of mol.atoms) {
     lines.push(`${a.el} ${a.pos.map((v) => v.toFixed(4)).join(' ')}`);
   }
@@ -20,6 +25,13 @@ export function toMolBlock(mol, title = 'mol-craft') {
   for (const b of mol.bonds) {
     L.push(`${String(b.i + 1).padStart(3)}${String(b.j + 1).padStart(3)}${String(b.order).padStart(3)}  0  0  0  0`);
   }
+  const charged = mol.atoms
+    .map((atom, index) => ({ index: index + 1, charge: Number.isFinite(atom.charge) ? Math.trunc(atom.charge) : 0 }))
+    .filter(({ charge }) => charge !== 0);
+  for (let offset = 0; offset < charged.length; offset += 8) {
+    const chunk = charged.slice(offset, offset + 8);
+    L.push(`M  CHG${String(chunk.length).padStart(3)}${chunk.map(({ index, charge }) => `${String(index).padStart(4)}${String(charge).padStart(4)}`).join('')}`);
+  }
   L.push('M  END');
   return L.join('\n') + '\n';
 }
@@ -27,10 +39,12 @@ export function toMolBlock(mol, title = 'mol-craft') {
 export function toPDB(mol) {
   const L = [];
   mol.atoms.forEach((a, i) => {
+    const charge = Number.isFinite(a.charge) ? Math.trunc(a.charge) : 0;
+    const pdbCharge = charge === 0 ? '  ' : `${Math.min(9, Math.abs(charge))}${charge > 0 ? '+' : '-'}`;
     L.push(
       'HETATM' + String(i + 1).padStart(5) + ' ' + (a.el + String(i + 1)).padEnd(4).slice(0, 4) +
       ' LIG A   1    ' + a.pos.map((v) => v.toFixed(3).padStart(8)).join('') +
-      '  1.00  0.00          ' + a.el.padStart(2),
+      '  1.00  0.00          ' + a.el.padStart(2) + pdbCharge,
     );
   });
   mol.atoms.forEach((_, i) => {
@@ -49,7 +63,7 @@ const unb64url = (s) => atob(s.replace(/-/g, '+').replace(/_/g, '/'));
 
 export function encodeState(mol) {
   const compact = {
-    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000)]),
+    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null]),
     b: mol.bonds.map((x) => [x.i, x.j, x.order]),
   };
   return b64url(JSON.stringify(compact));
@@ -58,7 +72,7 @@ export function encodeState(mol) {
 export function decodeState(str) {
   const o = JSON.parse(unb64url(str));
   return {
-    atoms: o.a.map(([el, x, y, z]) => ({ el, pos: [x, y, z] })),
+    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}) })),
     bonds: o.b.map(([i, j, order]) => ({ i, j, order })),
   };
 }
@@ -79,7 +93,7 @@ const b64urlToBytes = (s) =>
 export async function encodeStateAsync(mol) {
   if (typeof CompressionStream === 'undefined') return encodeState(mol);
   const json = JSON.stringify({
-    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000)]),
+    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null]),
     b: mol.bonds.map((x) => [x.i, x.j, x.order]),
   });
   const packed = await streamThrough(new TextEncoder().encode(json), new CompressionStream('deflate-raw'));
@@ -91,7 +105,7 @@ export async function decodeStateAsync(str) {
   const raw = await streamThrough(b64urlToBytes(str.slice(1)), new DecompressionStream('deflate-raw'));
   const o = JSON.parse(new TextDecoder().decode(raw));
   return {
-    atoms: o.a.map(([el, x, y, z]) => ({ el, pos: [x, y, z] })),
+    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}) })),
     bonds: o.b.map(([i, j, order]) => ({ i, j, order })),
   };
 }

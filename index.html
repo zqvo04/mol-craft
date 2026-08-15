@@ -525,7 +525,7 @@
   <button id="share">링크 복사</button>
   <button id="share-short">단축 링크</button>
   <button id="catalog-open" class="catalog-open">분자 카탈로그 <span id="catalog-compare-count">0</span></button>
-  <span id="disclaimer">UFF 역장 · 진공 · 정전기항 제외 · 정성 비교용(양자계산 대체 아님)</span>
+  <span id="disclaimer">UFF 역장 · 진공 · 정전기 에너지항 제외 · 정성 비교용(양자계산 대체 아님)</span>
   <button id="theme-toggle" title="다크모드 전환" aria-pressed="false">
     <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
     <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a6.8 6.8 0 0 0 10.2 10.2z"/></svg>
@@ -537,6 +537,11 @@
     <button id="tool-select" class="tool" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
     <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
     <button id="tool-bond" class="tool" data-tool="bond" title="원자 두 개를 순서대로 클릭하면 잇고, 결합선을 클릭하면 차수가 바뀝니다">결합·차수</button>
+  </div>
+  <div id="charge-controls" aria-label="선택 원자 형식전하">
+    <button id="charge-minus" title="선택 원자 형식전하를 1 낮춥니다">전하 −</button>
+    <button id="charge-reset" title="선택 원자 형식전하를 0으로 초기화합니다">전하 0</button>
+    <button id="charge-plus" title="선택 원자 형식전하를 1 높입니다">전하 +</button>
   </div>
   <div id="toolbar-sep"></div>
   <div id="palette" title="원소를 고르면 붙이기 도구로 전환됩니다 (숫자키 1~9)"></div>
