@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "test": "node --test",
+    "test:ui": "node scripts/verify-browser-ui.mjs",
     "serve": "python3 -m http.server 8000"
   }
 }
