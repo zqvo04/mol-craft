@@ -1,6 +1,7 @@
-import { createMolecule, addAtom, addBond } from './model.js';
+import { createMolecule, addAtom, addBond, bondOrderSum } from './model.js';
 import { sub, add, scale, cross, dot, unit, rotateAround } from './geom.js';
 import { typeAtom, bondLength } from './uff.js';
+import { MAX_VALENCE } from './params.js';
 
 const T = 0.63; // 정사면체 시작 좌표용 상수
 
@@ -115,7 +116,8 @@ export function loadPreset(key) {
 
 // ---- 고리 템플릿 ----------------------------------------------------------
 // 국소 좌표계(원점 = 고리 중심, 탄소 0 = +X축 위)에서 미리 계산해둔 정육각형 고리.
-// atom0는 훗날 앵커와 결합할 자리라 수소를 하나만 갖는다(다른 탄소는 정상 개수).
+// 방향족 atom0는 앵커와 새 단일결합을 만들 자리를 비워둔다. 여기에 수소까지 두면
+// 방향족 결합차수 합(3) + C-H + 새 C-C가 되어 5가처럼 보이는 과잉 구조가 됐다.
 // 방향족은 결합 order를 1.5·타입을 C_R로 직접 박아 넣는다 — 만들면서 이미 벤젠인 걸
 // 아는 템플릿이라 aromatize(고리 인식)를 따로 돌릴 필요가 없다.
 function hexRing(bondLen, chBond, sp3) {
@@ -131,10 +133,13 @@ function hexRing(bondLen, chBond, sp3) {
   for (let k = 0; k < 6; k++) {
     const p = atoms[k][1];
     const out = unit(p); // 원점이 중심이므로 반지름 방향 = p 방향
-    if (k === 0) {
-      // 앵커와 결합할 자리 — 수소 하나만 고리 평면 밖(+Z)에 둔다.
+    if (k === 0 && sp3) {
+      // 포화 고리의 첨부 탄소는 고리 결합 2개와 새 앵커 결합 1개를 가지므로 H 하나가 남는다.
       const idx = atoms.push(['H', add(p, [0, 0, chBond])]) - 1;
       bonds.push([0, idx, 1]);
+    } else if (k === 0) {
+      // 방향족 첨부 탄소는 외부 결합이 이미 네 번째 원자가를 채우므로 H를 넣지 않는다.
+      continue;
     } else if (sp3) {
       // 정사면체 절반각(~54.7°)만큼 평면 밖 위/아래로 벌어진 H 두 개.
       const inPlane = scale(out, chBond * 0.577);
@@ -149,16 +154,121 @@ function hexRing(bondLen, chBond, sp3) {
   return { atoms, bonds, attachType: cType };
 }
 
+function saturatedRing(size, bondLen = 1.53) {
+  const radius = bondLen / (2 * Math.sin(Math.PI / size));
+  const atoms = [];
+  const bonds = [];
+  for (let k = 0; k < size; k++) {
+    const theta = (k * 2 * Math.PI) / size;
+    const z = size === 5 ? (k % 2 ? 0.24 : -0.12) : (k % 2 ? -0.20 : 0.20);
+    atoms.push(['C', [radius * Math.cos(theta), radius * Math.sin(theta), z], 'C_3']);
+  }
+  for (let k = 0; k < size; k++) bonds.push([k, (k + 1) % size, 1]);
+  for (let k = 0; k < size; k++) {
+    const p = atoms[k][1];
+    const outward = unit([p[0], p[1], 0]);
+    const hydrogens = k === 0 ? 1 : 2;
+    for (let h = 0; h < hydrogens; h++) {
+      const z = h === 0 ? 0.84 : -0.84;
+      const pos = add(add(p, scale(outward, 0.63)), [0, 0, z]);
+      const idx = atoms.push(['H', pos, 'H_']) - 1;
+      bonds.push([k, idx, 1]);
+    }
+  }
+  return { atoms, bonds, attachType: 'C_3' };
+}
+
+function aromaticPyridine() {
+  const template = hexRing(1.40, 1.08, false);
+  template.atoms[3][0] = 'N';
+  template.atoms[3][2] = 'N_R';
+  const hBond = template.bonds.find(([i, j]) => (i === 3 && template.atoms[j][0] === 'H') || (j === 3 && template.atoms[i][0] === 'H'));
+  const hIndex = hBond?.[0] === 3 ? hBond[1] : hBond?.[0];
+  if (Number.isInteger(hIndex)) {
+    template.atoms.splice(hIndex, 1);
+    template.bonds = template.bonds
+      .filter(([i, j]) => i !== hIndex && j !== hIndex)
+      .map(([i, j, order]) => [i > hIndex ? i - 1 : i, j > hIndex ? j - 1 : j, order]);
+  }
+  return template;
+}
+
+function aromaticFuran() {
+  const size = 5;
+  const radius = 1.40 / (2 * Math.sin(Math.PI / size));
+  const atoms = [];
+  const bonds = [];
+  for (let k = 0; k < size; k++) {
+    const theta = (k * 2 * Math.PI) / size;
+    const isOxygen = k === 3;
+    atoms.push([isOxygen ? 'O' : 'C', [radius * Math.cos(theta), radius * Math.sin(theta), 0], isOxygen ? 'O_R' : 'C_R']);
+  }
+  for (let k = 0; k < size; k++) bonds.push([k, (k + 1) % size, 1.5]);
+  for (let k = 1; k < size; k++) {
+    if (k === 3) continue;
+    const p = atoms[k][1];
+    const idx = atoms.push(['H', add(p, scale(unit(p), 1.08)), 'H_']) - 1;
+    bonds.push([k, idx, 1]);
+  }
+  return { atoms, bonds, attachType: 'C_R' };
+}
+
 export const RING_TEMPLATES = {
-  benzene: { name: '벤젠 고리 (방향족)', ...hexRing(1.40, 1.08, false) },
-  cyclohexane: { name: '사이클로헥산 고리', ...hexRing(1.54, 1.09, true) },
+  benzene: { name: '벤젠', group: 'ring', detail: '방향족 6원 고리', ...hexRing(1.40, 1.08, false) },
+  cyclohexane: { name: '사이클로헥산', group: 'ring', detail: '포화 6원 고리', ...hexRing(1.54, 1.09, true) },
+  cyclopentane: { name: '사이클로펜탄', group: 'ring', detail: '포화 5원 고리', ...saturatedRing(5) },
+  pyridine: { name: '피리딘', group: 'heteroring', detail: '질소 포함 방향족 고리', ...aromaticPyridine() },
+  furan: { name: '푸란', group: 'heteroring', detail: '산소 포함 방향족 고리', ...aromaticFuran() },
+  carbonyl: {
+    name: '카보닐', group: 'functional', detail: 'C=O 기능기', attachType: 'C_2',
+    atoms: [['C', [0, 0, 0], 'C_2'], ['O', [1.23, 0, 0], 'O_2'], ['H', [-0.48, 0.93, 0], 'H_']],
+    bonds: [[0, 1, 2], [0, 2, 1]],
+  },
+  hydroxyl: {
+    name: '하이드록실', group: 'functional', detail: 'O–H 기능기', attachType: 'O_3',
+    atoms: [['O', [0, 0, 0], 'O_3'], ['H', [0.96, 0, 0], 'H_']], bonds: [[0, 1, 1]],
+  },
+  alkene: {
+    name: '알켄', group: 'functional', detail: 'C=C 불포화 결합', attachType: 'C_2',
+    atoms: [['C', [0, 0, 0], 'C_2'], ['C', [1.34, 0, 0], 'C_2'], ['H', [-0.48, 0.92, 0], 'H_'], ['H', [1.82, 0.92, 0], 'H_'], ['H', [1.82, -0.92, 0], 'H_']],
+    bonds: [[0, 1, 2], [0, 2, 1], [1, 3, 1], [1, 4, 1]],
+  },
 };
+
+export const STRUCTURE_LIBRARY = [
+  { key: 'benzene', symbol: '⌬', title: '벤젠', group: 'ring' },
+  { key: 'cyclohexane', symbol: '⬡', title: '사이클로헥산', group: 'ring' },
+  { key: 'cyclopentane', symbol: '⬠', title: '사이클로펜탄', group: 'ring' },
+  { key: 'pyridine', symbol: 'N⌬', title: '피리딘', group: 'heteroring' },
+  { key: 'furan', symbol: 'O⬠', title: '푸란', group: 'heteroring' },
+  { key: 'carbonyl', symbol: 'C=O', title: '카보닐', group: 'functional' },
+  { key: 'hydroxyl', symbol: '–OH', title: '하이드록실', group: 'functional' },
+  { key: 'alkene', symbol: 'C=C', title: '알켄', group: 'functional' },
+];
+
+// 라이브러리의 모든 구조 단위가 앵커/첨부 원자의 정상 원자가를 넘지 않는지 먼저 검사한다.
+// app.js의 canBond는 실제 좌표와 UFF 목표 결합 길이까지 검증하므로, 이 함수는 그보다 앞선
+// 빠른 구조적 방어선이다. 두 검사를 함께 써야 “유효한 단위이지만 현재 앵커엔 못 붙임”을
+// 학생에게 구분해 설명할 수 있다.
+export function validateStructureAttachment(mol, anchorIdx, template) {
+  const anchor = mol.atoms[anchorIdx];
+  if (!anchor || !template?.atoms?.length) return { ok: false, reason: 'invalid-template' };
+  const anchorLimit = MAX_VALENCE[anchor.el] ?? 0;
+  if (bondOrderSum(mol, anchorIdx) + 1 > anchorLimit) return { ok: false, reason: 'anchor-valence' };
+  const [attachEl] = template.atoms[0];
+  const attachLimit = MAX_VALENCE[attachEl] ?? 0;
+  const internalOrder = template.bonds
+    .filter(([i, j]) => i === 0 || j === 0)
+    .reduce((sum, [, , order]) => sum + (order ?? 1), 0);
+  if (internalOrder + 1 > attachLimit) return { ok: false, reason: 'template-valence' };
+  return { ok: true, reason: 'ok' };
+}
 
 // template의 국소 +X(atom0 바깥 방향)를 slotDir로 정렬하고, atom0가 앵커에서 UFF 평형
 // 결합 길이만큼 떨어지도록 평행이동한 세계 좌표를 계산한다(mol은 읽기만 함 — 앵커 타입을
 // 알아야 결합 길이가 나온다). 고스트 미리보기(app.js)와 실제 삽입(insertRingTemplate)이
 // 이 함수 하나를 공유해 "미리 보여준 자리 = 실제로 붙는 자리"를 보장한다.
-export function computeRingPlacement(mol, anchorIdx, template, slotDir) {
+export function computeRingPlacement(mol, anchorIdx, template, slotDir, twistDeg = 0) {
   const dir = unit(slotDir);
   const axis = cross([1, 0, 0], dir);
   const cosT = Math.max(-1, Math.min(1, dot([1, 0, 0], dir)));
@@ -171,14 +281,15 @@ export function computeRingPlacement(mol, anchorIdx, template, slotDir) {
   const anchorPos = mol.atoms[anchorIdx].pos;
   const bondLen = bondLength(typeAtom(mol, anchorIdx), template.attachType, 1);
   const atom0World = add(anchorPos, scale(dir, bondLen));
-  const shift = sub(atom0World, rotate(template.atoms[0][1]));
-  return template.atoms.map(([el, pos, type]) => [el, add(rotate(pos), shift), type]);
+  const twist = (p) => (twistDeg ? rotateAround(p, [0, 0, 0], [1, 0, 0], twistDeg) : p);
+  const shift = sub(atom0World, rotate(twist(template.atoms[0][1])));
+  return template.atoms.map(([el, pos, type]) => [el, add(rotate(twist(pos)), shift), type]);
 }
 
 // 계산된 배치를 실제로 mol에 붙인다. attachAtom처럼 앵커 쪽에는 단일결합 하나만 만든다.
 // 반환값은 새로 추가된 원자 인덱스 배열(template.atoms 순서대로).
-export function insertRingTemplate(mol, anchorIdx, template, slotDir) {
-  const placed = computeRingPlacement(mol, anchorIdx, template, slotDir);
+export function insertRingTemplate(mol, anchorIdx, template, slotDir, twistDeg = 0) {
+  const placed = computeRingPlacement(mol, anchorIdx, template, slotDir, twistDeg);
   const idxMap = placed.map(([el, pos, type]) => {
     const idx = addAtom(mol, el, pos);
     if (type) mol.atoms[idx].type = type;

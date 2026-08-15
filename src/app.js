@@ -8,11 +8,12 @@ import {
   geometryName, bondDistanceOk, cycleBondOrder, slotKinds,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
-import { loadPreset, PRESETS, RING_TEMPLATES, computeRingPlacement, insertRingTemplate } from './presets.js';
+import { loadPreset, PRESETS, RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, validateStructureAttachment } from './presets.js';
 import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
+import { scanTorsion, summarizeStructure, torsionInterpretation } from './learning.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -29,8 +30,9 @@ const state = {
   azimuth: 0,  // 앵커에 이웃이 하나뿐일 때(자리가 사실상 하나) R 키/휠로 돌리는 방위각(도).
                // 자리가 여러 개면 대신 slot을 순환한다 — 두 조작은 서로 배타적이다.
   pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
-  ringTemplate: 'benzene', // 'ring' 도구가 찍을 고리 종류 — RING_TEMPLATES의 키
-  ringGhost: null, // { anchor, placed, ok } — 'ring' 도구의 고스트 미리보기
+  ringTemplate: 'benzene', // 내부 삽입 도구가 사용할 구조 단위 — RING_TEMPLATES의 키
+  ringTwist: 0, // 구조 단위의 앵커 결합축 회전 각도. R 키로 30°씩 회전한다.
+  ringGhost: null, // { anchor, placed, ok } — 구조 단위 고스트 미리보기
   undoStack: [],
 };
 
@@ -266,6 +268,55 @@ requestAnimationFrame(warnGlowLoop);
 
 const $ = (id) => document.getElementById(id);
 
+function setInspectorTab(tab) {
+  document.querySelectorAll('[data-inspector-tab]').forEach((button) => {
+    const active = button.dataset.inspectorTab === tab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  $('analysis-panel').hidden = tab !== 'analysis';
+  $('learning-panel').hidden = tab !== 'learning';
+}
+
+document.querySelector('[data-inspector-tabs]').addEventListener('click', (ev) => {
+  const button = ev.target.closest('[data-inspector-tab]');
+  if (button) setInspectorTab(button.dataset.inspectorTab);
+});
+
+function updateLearningPanel() {
+  const summary = summarizeStructure(state.mol);
+  const hybridization = Object.entries(summary.hybridization)
+    .filter(([key]) => key !== '—')
+    .map(([key, count]) => `<span class="learning-chip"><b>${key}</b> ${count}개</span>`).join('') || '<span class="learning-muted">현재 원자 타입을 해석할 수 없습니다.</span>';
+  $('learning-overview').innerHTML = `<p><b>${summary.atomCount}</b>개 원자 · <b>${summary.bondCount}</b>개 결합</p><div class="learning-chip-row">${hybridization}</div>`;
+  const candidateCenters = (state.selection.length ? state.selection : state.mol.atoms.map((_, i) => i))
+    .filter((index) => neighbors(state.mol, index).length >= 2)
+    .slice(0, 3);
+  $('learning-geometry').innerHTML = candidateCenters.length
+    ? candidateCenters.map((index) => {
+      const atom = state.mol.atoms[index];
+      const v = vseprCheck(state.mol, index);
+      const type = typeAtom(state.mol, index);
+      const hybrid = /_1$/.test(type) ? 'sp' : /_2$|_R$/.test(type) ? 'sp²' : /_3/.test(type) ? 'sp³' : '—';
+      const status = v.satisfied ? '현재 결합각이 이상각에 가깝습니다.' : `가장 큰 각도 편차는 ${Math.max(...v.angles.map((angle) => angle.deviation)).toFixed(1)}°입니다.`;
+      return `<article class="learning-card"><b>${atom.el}${index} · ${hybrid} · ${geometryName(state.mol, index)}</b><p>이상 결합각 ${v.ideal}° · ${status} 결합각은 고립전자쌍·입체장애·다중결합의 영향을 함께 받습니다.</p></article>`;
+    }).join('')
+    : '<p class="learning-muted">결합이 2개 이상인 원자를 선택하면 혼성화와 결합 기하를 설명합니다.</p>';
+  $('learning-groups').innerHTML = summary.groups.length
+    ? summary.groups.map((group) => `<article class="learning-card"><b>${group.label}</b><p>${group.note}</p></article>`).join('')
+    : '<p class="learning-muted">인식한 주요 기능기가 없습니다. 구조 단위 라이브러리에서 카보닐·하이드록실·알켄을 붙여 보세요.</p>';
+  $('learning-contacts').innerHTML = summary.contacts.length
+    ? summary.contacts.map((contact) => `<article class="learning-card contact"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.distance.toFixed(2)} Å — UFF vdW 기준의 ${(contact.ratio * 100).toFixed(0)}%입니다. 가까운 비결합 접촉은 입체장애의 단서가 될 수 있습니다.</p></article>`).join('')
+    : '<p class="learning-muted">강한 근접 비결합 접촉이 없습니다. 이는 반응성이나 안정성을 완전히 예측하는 결과는 아닙니다.</p>';
+  const selection = state.selection;
+  const torsion = selection.length === 4 && isTorsionChain(state.mol, selection) && branchAtoms(state.mol, selection[1], selection[2]) !== null
+    ? torsionInterpretation(measure(state.mol, selection))
+    : null;
+  $('torsion-study').innerHTML = torsion
+    ? `<article class="learning-card"><b>${torsion.title}</b><p>${torsion.note}</p></article>`
+    : '<p class="learning-muted">이어진 원자 4개를 순서대로 선택하면 이면각 배치의 교육용 해석이 나타납니다.</p>';
+}
+
 const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: '비틀림', vdw: '반데르발스' };
 
 // 총에너지 · 항별 막대 · 선택 측정값 · VSEPR 이상각 만족 여부를 패널에 반영한다.
@@ -313,32 +364,56 @@ function updatePanels(e) {
     + (s2.more ? `<span class="chip">+${s2.more}개</span>` : '');
 
   updateDihedralPanel();
+  updateLearningPanel();
 }
 
 // 선택 4개 + 고리 결합이 아니면 이면각 슬라이더를 활성화해 setDihedral로 직접 회전시킨다.
 function updateDihedralPanel() {
   const s = state.selection;
   const slider = $('dihedral');
+  const scanButton = $('torsion-scan');
+  const scanResult = $('torsion-scan-result');
   if (s.length !== 4) {
     slider.disabled = true;
+    scanButton.disabled = true;
     $('dihedral-info').textContent = '원자 4개를 순서대로 선택하면 활성화됩니다';
+    scanResult.innerHTML = '<span class="learning-muted">회전 가능한 결합을 고르면 에너지 표본을 비교할 수 있습니다.</span>';
     return;
   }
   if (!isTorsionChain(state.mol, s)) {
     slider.disabled = true;
+    scanButton.disabled = true;
     $('dihedral-info').textContent = '이어진 원자 4개(i-j-k-l)를 순서대로 선택하세요';
     return;
   }
   if (branchAtoms(state.mol, s[1], s[2]) === null) {
     slider.disabled = true;
+    scanButton.disabled = true;
     $('dihedral-info').textContent = '고리 결합 — 직접 회전 불가';
     return;
   }
   slider.disabled = false;
+  scanButton.disabled = false;
   const deg = Math.round(measure(state.mol, s));
   slider.value = deg;
   $('dihedral-info').textContent = `${deg}°`;
+  const scan = state.torsionScan;
+  if (scan?.selection.join(',') === s.join(',') && scan.samples.length) {
+    const min = scan.samples.reduce((best, sample) => sample.energy < best.energy ? sample : best);
+    const max = Math.max(...scan.samples.map((sample) => sample.energy));
+    const span = Math.max(max - min.energy, 0.001);
+    scanResult.innerHTML = `<div class="torsion-spark" aria-label="이면각 에너지 표본">${scan.samples.map((sample) => `<span title="${sample.deg}° · ${sample.energy.toFixed(2)} kcal/mol" style="height:${Math.max(8, ((sample.energy - min.energy) / span) * 100)}%"></span>`).join('')}</div><p><b>최저 표본 ${min.deg}°</b> · ${min.energy.toFixed(2)} kcal/mol. 표본점 사이의 정확한 장벽·용매 효과는 이 모델로 단정할 수 없습니다.</p>`;
+  } else scanResult.innerHTML = '<span class="learning-muted">30° 간격으로 현재 이면각의 상대 에너지를 계산합니다.</span>';
 }
+
+$('torsion-scan').onclick = () => {
+  const samples = scanTorsion(state.mol, state.selection, 30);
+  if (!samples.length) { toast('회전 가능한 이어진 원자 4개를 선택하세요', 'err'); return; }
+  state.torsionScan = { selection: [...state.selection], samples };
+  render();
+  const min = samples.reduce((best, sample) => sample.energy < best.energy ? sample : best);
+  toast(`비틀림 스캔 완료 · 최저 표본 ${min.deg}°`);
+};
 
 function toggleSelect(i) {
   const idx = state.selection.indexOf(i);
@@ -380,6 +455,9 @@ const REASON_MSG = {
   'same-atom': '같은 원자입니다',
   'valence-full': '원자가가 가득 찼습니다 — 더 붙일 수 없습니다',
   'too-far': '너무 멀리 떨어진 원자입니다 — 가까운 원자끼리 이으세요',
+  'anchor-valence': '이 앵커의 원자가가 가득 찼습니다 — 다른 원자나 결합 위치를 선택하세요',
+  'template-valence': '선택한 구조 단위의 첨부 위치가 유효하지 않습니다',
+  'invalid-template': '구조 단위를 해석할 수 없습니다',
 };
 
 // anchor에 현재 팔레트 원소를 붙인다. 방향은 snap.idealDirection이 VSEPR 이상각에 맞춰
@@ -577,6 +655,8 @@ function setTool(tool) {
     b.classList.toggle('active', matches);
   });
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
+  document.querySelectorAll('#structure-library [data-template]').forEach((b) => b.classList.toggle('active', tool === 'ring' && b.dataset.template === state.ringTemplate));
+  $('structure-library-toggle').classList.toggle('active', tool === 'ring');
   updateToolHint();
 }
 
@@ -589,13 +669,13 @@ const TOOL_HINT = {
   erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
   bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
   place: '<b>붙이기</b> — 원자를 조준하면 빈 자리가 보입니다. <b>R</b> 키나 휠로 자리를 바꾸고 클릭해 붙입니다. 보라색 자리는 비공유 전자쌍이라 붙일 수 없습니다.',
-  ring: '<b>고리</b> — 원자를 조준하면 6원 고리가 미리 보입니다. 클릭해 붙입니다(원자·결합이 한 번에 생기고 자동으로 살짝 완화됩니다).',
+  ring: '<b>구조 단위 삽입</b> — 원자를 조준하면 선택한 고리 또는 기능기가 미리 보입니다. 클릭해 붙이고, <b>R</b> 키로 배치를 회전할 수 있습니다.',
 };
 
 function updateToolHint() {
   let msg = TOOL_HINT[state.tool] ?? '';
   if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
-  if (state.tool === 'ring') msg += ` 현재 고리: <b>${RING_TEMPLATES[state.ringTemplate].name}</b>`;
+  if (state.tool === 'ring') msg += ` 현재 단위: <b>${RING_TEMPLATES[state.ringTemplate].name}</b> · 회전 <b>${state.ringTwist}°</b>`;
   if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
     msg += ` · 방위각 <b>${state.azimuth}°</b>`;
   }
@@ -614,8 +694,6 @@ $('tool-view').onclick = () => setTool('view');
 $('tool-select').onclick = () => setTool('select');
 $('tool-erase').onclick = () => setTool('erase');
 $('tool-bond').onclick = () => setTool('bond');
-$('tool-ring-benzene').onclick = () => { state.ringTemplate = 'benzene'; setTool('ring'); };
-$('tool-ring-cyclohexane').onclick = () => { state.ringTemplate = 'cyclohexane'; setTool('ring'); };
 
 $('palette').innerHTML = ELEMENTS.map((el, k) =>
   `<button data-el="${el}" title="${k < 9 ? `단축키 ${k + 1}` : ''}">${el}</button>`).join('');
@@ -626,6 +704,51 @@ $('palette').onclick = (ev) => {
   state.slot = 0;
   setTool('place');
 };
+
+// ---- 구조 단위 라이브러리 --------------------------------------------------
+// 고리와 기능기를 편집 도구와 분리한다. 학생은 원소 팔레트의 확장으로 인식하고,
+// 선택 뒤에는 기존의 안정적인 고스트/원자가 검사 경로로 들어간다.
+const structureLibraryWrap = $('structure-library-wrap');
+const structureLibrary = $('structure-library');
+const structureLibraryToggle = $('structure-library-toggle');
+const LIBRARY_GROUPS = [
+  ['ring', '탄소 고리'], ['heteroring', '헤테로고리'], ['functional', '기능기'],
+];
+
+function renderStructureLibrary() {
+  const sections = LIBRARY_GROUPS.map(([group, label]) => {
+    const units = STRUCTURE_LIBRARY.filter((unit) => unit.group === group);
+    if (!units.length) return '';
+    return `<div class="structure-library-group"><h3>${label}</h3><div class="structure-grid">${units.map((unit) => {
+      const template = RING_TEMPLATES[unit.key];
+      return `<button class="structure-card" data-template="${unit.key}" title="${template.detail} 삽입"><span class="structure-symbol">${unit.symbol}</span><strong>${unit.title}</strong><small>${template.detail}</small></button>`;
+    }).join('')}</div></div>`;
+  }).join('');
+  structureLibrary.innerHTML = `<div class="structure-library-head"><div><strong>구조 단위</strong><p>앵커 원자를 조준해 미리본 뒤 클릭하세요.</p></div><button data-library-close aria-label="구조 단위 라이브러리 닫기">닫기</button></div>${sections}`;
+}
+
+function setStructureLibraryOpen(open) {
+  structureLibrary.hidden = !open;
+  structureLibraryToggle.setAttribute('aria-expanded', String(open));
+  if (open) structureLibrary.querySelector('button[data-template]')?.focus();
+}
+
+renderStructureLibrary();
+structureLibraryToggle.onclick = () => setStructureLibraryOpen(structureLibrary.hidden);
+structureLibrary.onclick = (ev) => {
+  if (ev.target.closest('[data-library-close]')) { setStructureLibraryOpen(false); structureLibraryToggle.focus(); return; }
+  const card = ev.target.closest('[data-template]');
+  if (!card) return;
+  state.ringTemplate = card.dataset.template;
+  state.ringTwist = 0;
+  setStructureLibraryOpen(false);
+  setTool('ring');
+  toast(`${RING_TEMPLATES[state.ringTemplate].name} 삽입: 원자를 조준하세요`);
+};
+document.addEventListener('click', (ev) => { if (!structureLibraryWrap.contains(ev.target)) setStructureLibraryOpen(false); });
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !structureLibrary.hidden) { setStructureLibraryOpen(false); structureLibraryToggle.focus(); }
+});
 
 // ---- 붙이기 고스트 미리보기 -----------------------------------------------
 // idealDirection/canBond를 attachAtom과 똑같이 호출해 "미리 보여준 자리 = 실제로 붙는 자리"를
@@ -746,8 +869,10 @@ let ringGhostShapes = [];
 
 function previewRing(anchor) {
   const template = RING_TEMPLATES[state.ringTemplate];
+  const structuralCheck = validateStructureAttachment(state.mol, anchor, template);
+  if (!structuralCheck.ok) return { anchor, placed: [], ok: false, reason: structuralCheck.reason };
   const dir = idealDirection(state.mol, anchor);
-  const placed = computeRingPlacement(state.mol, anchor, template, dir);
+  const placed = computeRingPlacement(state.mol, anchor, template, dir, state.ringTwist);
   const idx = addAtom(state.mol, placed[0][0], placed[0][1]);
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
@@ -763,6 +888,11 @@ function drawRingGhost() {
   const anchorPos = state.mol.atoms[g.anchor].pos;
   const worldPos = g.placed.map(([, pos]) => pos);
   const toXYZ = (p) => ({ x: p[0], y: p[1], z: p[2] });
+  if (!worldPos.length) {
+    ringGhostShapes.push(viewer.addSphere({ center: toXYZ(anchorPos), radius: 0.44, color, opacity: 0.55, wireframe: true }));
+    viewer.render();
+    return;
+  }
   ringGhostShapes.push(viewer.addLine({ start: toXYZ(anchorPos), end: toXYZ(worldPos[0]), color, dashed: true }));
   for (const [i, j] of RING_TEMPLATES[state.ringTemplate].bonds) {
     ringGhostShapes.push(viewer.addLine({ start: toXYZ(worldPos[i]), end: toXYZ(worldPos[j]), color }));
@@ -787,7 +917,7 @@ function attachRing(anchor) {
   const template = RING_TEMPLATES[state.ringTemplate];
   const dir = idealDirection(state.mol, anchor);
   pushUndo();
-  insertRingTemplate(state.mol, anchor, template, dir);
+  insertRingTemplate(state.mol, anchor, template, dir, state.ringTwist);
   minimize(state.mol, { maxSteps: 80 });
   playClick(880);
   clearRingGhost();
@@ -1106,7 +1236,14 @@ document.addEventListener('keydown', (ev) => {
   }
   if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
   if (ev.key === 'r' || ev.key === 'R') {
-    if (state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) rotateAzimuth(AZIMUTH_STEP);
+    if (state.tool === 'ring') {
+      state.ringTwist = (state.ringTwist + 30) % 360;
+      if (state.ringGhost) {
+        state.ringGhost = previewRing(state.ringGhost.anchor);
+        drawRingGhost();
+      }
+      updateToolHint();
+    } else if (state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) rotateAzimuth(AZIMUTH_STEP);
     else cycleSlot(1);
     return;
   }

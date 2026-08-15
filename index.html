@@ -235,6 +235,10 @@
     overflow-y: auto;
     padding: 8px 20px;
   }
+  .inspector-tabs { position: sticky; top: -8px; z-index: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: -8px -20px 2px; padding: 10px 20px 8px; background: color-mix(in srgb, var(--glass-bg-strong) 94%, transparent); -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); border-bottom: 1px solid var(--border); }
+  .inspector-tabs button { padding: 6px 9px; border-radius: 10px; box-shadow: none; background: transparent; }.inspector-tabs button.active { color: var(--primary-fg); background: var(--primary); }.inspector-panel[hidden] { display: none; }
+  .learning-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }.learning-chip { padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-fg); font: 11px/1.2 var(--font-mono); }.learning-chip b { color: var(--primary); }.learning-card { margin-top: 7px; padding: 8px 9px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--fg) 4%, transparent); font-size: 12px; }.learning-card b { color: var(--fg); }.learning-card p, .model-limit p { margin: 3px 0 0; color: var(--muted-fg); font-size: 11px; line-height: 1.45; }.learning-card.contact { border-left: 3px solid var(--accent); }.learning-muted { color: var(--muted-fg); font-size: 12px; }.model-limit { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .torsion-scan { width: 100%; margin-top: 8px; padding: 6px 9px; font-size: 11px; }.torsion-scan-result { margin-top: 7px; color: var(--muted-fg); font-size: 11px; line-height: 1.4; }.torsion-scan-result p { margin: 5px 0 0; }.torsion-spark { display: flex; align-items: end; gap: 2px; height: 34px; margin-top: 4px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--fg) 4%, transparent); }.torsion-spark span { flex: 1; min-height: 5px; border-radius: 3px 3px 1px 1px; background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--primary) 72%, var(--accent))); }
   section {
     padding: 16px 0;
     border-bottom: 1px solid var(--border);
@@ -380,6 +384,31 @@
     border: none; border-radius: 10px; background: transparent; box-shadow: none;
   }
   #palette button { min-width: 32px; font-family: var(--font-mono); font-weight: 600; }
+  #structure-library-wrap { position: relative; }
+  #structure-library-toggle { display: inline-flex; align-items: center; gap: 6px; }
+  #structure-library-toggle span { color: var(--primary); font-size: 15px; line-height: 1; }
+  #structure-library-toggle.active { background: var(--primary); color: var(--primary-fg); }
+  #structure-library-toggle.active span { color: inherit; }
+  #structure-library {
+    position: absolute; z-index: 25; top: calc(100% + 9px); left: 0;
+    width: min(420px, calc(100vw - 30px)); max-height: min(510px, calc(100vh - 180px)); overflow-y: auto;
+    padding: 12px; border: 1px solid var(--glass-border); border-radius: 18px;
+    background: color-mix(in srgb, var(--glass-bg-strong) 96%, transparent);
+    -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+    box-shadow: var(--shadow-md), var(--glass-highlight);
+    transform-origin: top left; animation: structure-pop .18s var(--ease-out, cubic-bezier(.23,1,.32,1));
+  }
+  #structure-library[hidden] { display: none; }
+  @keyframes structure-pop { from { opacity: 0; transform: translateY(-5px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  .structure-library-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 10px; }
+  .structure-library-head strong { font-size: 13px; }.structure-library-head p { margin: 2px 0 0; color: var(--muted-fg); font-size: 11px; line-height: 1.35; }
+  .structure-library-group { margin-top: 10px; }.structure-library-group h3 { margin: 0 0 6px; color: var(--muted-fg); font: 600 10px/1 var(--font-mono); letter-spacing: .08em; }
+  .structure-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .structure-card { display: grid; gap: 3px; min-height: 72px; padding: 8px; border-radius: 12px; text-align: left; background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  .structure-card:hover, .structure-card:focus-visible { background: color-mix(in srgb, var(--primary) 14%, transparent); border-color: color-mix(in srgb, var(--primary) 48%, var(--glass-border)); }
+  .structure-card.active { color: var(--primary-fg); background: var(--primary); border-color: var(--primary); }
+  .structure-symbol { color: var(--primary); font: 600 16px/1 var(--font-mono); }.structure-card.active .structure-symbol { color: inherit; }
+  .structure-card small { overflow: hidden; color: var(--muted-fg); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }.structure-card.active small { color: color-mix(in srgb, var(--primary-fg) 76%, transparent); }
   button.tool.active, #palette button.active {
     background: var(--primary); color: var(--primary-fg);
     box-shadow:
@@ -400,6 +429,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     button.tool.active, #palette button.active { animation: none; }
+    #structure-library { animation: none; }
   }
   #toolbar-sep { width: 1px; align-self: stretch; background: var(--border); }
   /* 현재 도구가 무슨 일을 하는지 항상 한 줄로 보여준다 — 예전엔 툴팁에만 있어서
@@ -469,11 +499,13 @@
     <button id="tool-select" class="tool" data-tool="select" title="선택: 클릭·Shift+클릭·드래그로 여러 개">선택</button>
     <button id="tool-erase" class="tool" data-tool="erase" title="지우개: 클릭한 원자 삭제">지우개</button>
     <button id="tool-bond" class="tool" data-tool="bond" title="원자 두 개를 순서대로 클릭하면 잇고, 결합선을 클릭하면 차수가 바뀝니다">결합·차수</button>
-    <button id="tool-ring-benzene" class="tool" data-tool="ring" data-ring="benzene" title="열린 자리에 벤젠 고리를 붙입니다">고리(벤젠)</button>
-    <button id="tool-ring-cyclohexane" class="tool" data-tool="ring" data-ring="cyclohexane" title="열린 자리에 사이클로헥산 고리를 붙입니다">고리(사이클로헥산)</button>
   </div>
   <div id="toolbar-sep"></div>
   <div id="palette" title="원소를 고르면 붙이기 도구로 전환됩니다 (숫자키 1~9)"></div>
+  <div id="structure-library-wrap">
+    <button id="structure-library-toggle" aria-haspopup="dialog" aria-expanded="false" title="고리와 기능기 구조 단위를 삽입합니다">구조 단위 <span aria-hidden="true">⌬</span></button>
+    <section id="structure-library" role="dialog" aria-label="구조 단위 라이브러리" hidden></section>
+  </div>
   <div id="toolbar-sep"></div>
   <button id="undo" title="실행취소 (Ctrl+Z)">↶ 실행취소</button>
   <button id="duplicate" title="선택 복제 (Ctrl+D)">복제</button>
@@ -489,13 +521,20 @@
   <div id="legend"><span>응력 낮음</span><span class="bar"></span><span>응력 높음</span></div>
   <div id="sketch2d" hidden></div>
 </div>
-<aside>
+<aside aria-label="분자 인스펙터">
+  <div class="inspector-tabs" data-inspector-tabs role="tablist" aria-label="분자 분석 패널">
+    <button class="active" data-inspector-tab="analysis" role="tab" aria-selected="true">분석</button>
+    <button data-inspector-tab="learning" role="tab" aria-selected="false">학습 노트</button>
+  </div>
+  <div id="analysis-panel" class="inspector-panel">
   <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>
   <section><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
   <section><h2>선택 측정</h2><div id="measure">원자를 2~4개 클릭</div></section>
   <section><h2>이면각 회전</h2>
     <input id="dihedral" type="range" min="-180" max="180" value="0" style="width:100%" disabled>
     <div id="dihedral-info" style="font-size:12px">원자 4개를 순서대로 선택하면 활성화됩니다</div>
+    <button id="torsion-scan" class="torsion-scan" disabled>비틀림 스캔</button>
+    <div id="torsion-scan-result" class="torsion-scan-result"><span class="learning-muted">회전 가능한 결합을 고르면 에너지 표본을 비교할 수 있습니다.</span></div>
   </section>
   <section><h2>최적화 리플레이</h2>
     <input id="replay" type="range" min="0" max="0" value="0" style="width:100%" disabled>
@@ -503,6 +542,15 @@
   </section>
   <section><h2>VSEPR 상태</h2><div id="vsepr">—</div></section>
   <section id="gallery-section" hidden><h2>공개 갤러리</h2><div id="gallery">불러오는 중…</div></section>
+  </div>
+  <div id="learning-panel" class="inspector-panel" hidden>
+    <section><h2>현재 구조</h2><div id="learning-overview"></div></section>
+    <section><h2>결합 기하</h2><div id="learning-geometry"></div></section>
+    <section><h2>기능기 힌트</h2><div id="learning-groups"></div></section>
+    <section><h2>입체장애 단서</h2><div id="learning-contacts"></div></section>
+    <section><h2>비틀림 학습</h2><div id="torsion-study"></div></section>
+    <section class="model-limit"><h2>계산 모델의 경계</h2><p>표시는 UFF 기반의 기하·상대 에너지·비결합 접촉을 학습용으로 해석합니다. 용매 효과, 전자 비편재화, 반응 경로, 수율과 정량 활성화 장벽은 직접 예측하지 않습니다.</p></section>
+  </div>
 </aside>
 <dialog id="catalog-dialog" aria-labelledby="catalog-title">
   <div class="catalog-shell">
