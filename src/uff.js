@@ -11,6 +11,14 @@ import {
 // 상태에서 결합각이 실제 화학과 어긋났다.
 // 방향족(C_R/N_R/O_R)은 별도 고리 인식이 필요하므로 여기서 자동 배정하지 않는다.
 // atom.type을 직접 지정하면 그 값이 우선한다(사용자 오버라이드 및 방향족 지정 경로).
+function isAmideNitrogen(mol, i) {
+  if (mol.atoms[i]?.el !== 'N') return false;
+  return neighbors(mol, i).some((carbon) => mol.atoms[carbon]?.el === 'C'
+    && mol.bonds.some((bond) => (bond.i === carbon || bond.j === carbon)
+      && bond.order === 2
+      && mol.atoms[bond.i === carbon ? bond.j : bond.i]?.el === 'O'));
+}
+
 export function typeAtom(mol, i) {
   const a = mol.atoms[i];
   if (a.type) return a.type;
@@ -28,7 +36,10 @@ export function typeAtom(mol, i) {
     case 'I': return 'I_';
     case 'B': return n >= 4 ? 'B_3' : 'B_2';
     case 'C': return maxOrder >= 3 ? 'C_1' : maxOrder === 2 ? 'C_2' : 'C_3';
-    case 'N': return maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3';
+    // 아마이드 N의 비공유전자쌍은 C=O와 공명해 C–N에 부분 이중결합을 만든다.
+    // 전하·공명 에너지를 계산하는 모델은 아니지만, N_R(sp²)로 승격하면 120° 기하,
+    // out-of-plane 억제, sp²–sp² 비틀림 항이 함께 적용돼 평면성 데모가 가능해진다.
+    case 'N': return isAmideNitrogen(mol, i) ? 'N_R' : (maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3');
     case 'O': return maxOrder >= 2 ? 'O_2' : 'O_3';
     // S/P도 C/N/O와 같은 원칙: 실제 결합차수 합(bo)이 원자가·혼성을 정하지, 이웃 개수(n)가
     // 정하지 않는다. 예전엔 n>=3이면 무조건 S_3+6(SF6급 육배위, theta0=90°)이라, 메틸 두 개

@@ -13,7 +13,7 @@ import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
-import { compareStructuralIsomerCandidate, scanTorsion, summarizeStructure, torsionInterpretation } from './learning.js';
+import { amideSites, compareStructuralIsomerCandidate, predictedIrBands, protonNmrSignals, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
 import { createMenuSelect } from './menu-select.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
@@ -310,10 +310,14 @@ function updateLearningPanel() {
         ? `<p><b>구조 이성질체 후보</b> · 두 구조 모두 ${isomer.referenceFormula}이지만 연결성 지문이 다릅니다. 실제 구조 이성질체 판단 전 결합 연결을 다시 확인하세요.</p>`
         : `<p><b>분자식이 다름</b> · 기준 ${isomer.referenceFormula} / 현재 ${isomer.candidateFormula}. 구조 이성질체 비교 대상이 아닙니다.</p>`;
   $('learning-validation').innerHTML = `<article class="learning-card concept"><p>${douText}</p></article><article class="learning-card"><b>구조 이성질체 점검</b>${isomerStatus}<button class="learning-action" data-isomer-reference>현재 구조를 기준으로 지정</button><p>같은 분자식과 다른 연결성은 구조 이성질체의 단서입니다. 이 판정은 연결성 지문 기반의 학습 보조이며, 그래프 동형 판정이나 입체이성질체 판정은 아닙니다.</p></article>${aromaticCards}`;
+  const stereo = stereochemicalAssignments(state.mol);
+  const rsCards = stereo.rs.map((assignment) => `<article class="learning-card concept"><b>C${assignment.center}: ${assignment.configuration}</b><p>CIP 우선순위 ${assignment.priorities.map(({ priority, element }) => `${priority}.${element}`).join(' → ')}. 최하위 우선순위를 뒤로 둔 3D 부호 계산 결과입니다.</p></article>`).join('');
+  const ezCards = stereo.ez.map((assignment) => `<article class="learning-card concept"><b>C${assignment.bond[0]}=C${assignment.bond[1]}: ${assignment.configuration}</b><p>양쪽 탄소에서 CIP 최우선 치환기(C${assignment.leftHigh}, C${assignment.rightHigh})의 상대 위치를 비교했습니다. cis/trans 대신 E/Z를 사용합니다.</p></article>`).join('');
+  $('learning-stereo').innerHTML = `${rsCards || ''}${ezCards || ''}<article class="learning-card limit"><b>판정 경계</b><p>${stereo.rs.length || stereo.ez.length ? 'CIP 동점·고리·동위원소·전하를 완전하게 다루지 못하면 판정을 보류합니다.' : '서로 다른 4개 가지를 갖는 sp³ 탄소 또는 양쪽에 다른 치환기가 있는 C=C를 만들면 판정합니다.'} 광학 회전 (+/−)과 UFF 에너지로 R/S를 예측하지 않습니다.</p></article>`;
   const candidateCenters = (state.selection.length ? state.selection : state.mol.atoms.map((_, i) => i))
     .filter((index) => neighbors(state.mol, index).length >= 2)
     .slice(0, 3);
-  $('learning-geometry').innerHTML = candidateCenters.length
+  const geometryCards = candidateCenters.length
     ? candidateCenters.map((index) => {
       const atom = state.mol.atoms[index];
       const v = vseprCheck(state.mol, index);
@@ -323,9 +327,21 @@ function updateLearningPanel() {
       return `<article class="learning-card"><b>${atom.el}${index} · ${hybrid} · ${geometryName(state.mol, index)}</b><p>이상 결합각 ${v.ideal}° · ${status} 결합각은 고립전자쌍·입체장애·다중결합의 영향을 함께 받습니다.</p></article>`;
     }).join('')
     : '<p class="learning-muted">결합이 2개 이상인 원자를 선택하면 혼성화와 결합 기하를 설명합니다.</p>';
+  const amides = amideSites(state.mol);
+  const amideCards = amides.map((site) => `<article class="learning-card concept"><b>펩타이드 결합의 평면성 · C${site.carbon}–N${site.nitrogen}</b><p>아마이드 N 비공유전자쌍의 공명 공여로 C–N 결합은 부분 이중결합 성격을 가집니다. 단백질에서 같은 아마이드 연결이 펩타이드 결합이며, O${site.oxygen}–C${site.carbon}–N${site.nitrogen} 평면성이 φ/ψ 회전의 출발점입니다.</p><p>모델은 N_R·평면 기하를 적용하지만, 15–20 kcal/mol 장벽의 정량값·수소결합·2차 구조 안정성은 예측하지 않습니다.</p></article>`).join('');
+  $('learning-geometry').innerHTML = `${geometryCards}${amideCards}`;
   $('learning-groups').innerHTML = summary.groups.length
     ? summary.groups.map((group) => `<article class="learning-card"><b>${group.label}</b><p>${group.note}</p></article>`).join('')
     : '<p class="learning-muted">인식한 주요 기능기가 없습니다. 구조 단위 라이브러리에서 카보닐·하이드록실·알켄을 붙여 보세요.</p>';
+  const ir = predictedIrBands(state.mol);
+  const nmr = protonNmrSignals(state.mol);
+  const irCard = ir.length
+    ? `<article class="learning-card"><b>예상 IR 작용기 밴드</b><p>${ir.map((band) => `${band.label} <b>${band.range}</b> (${band.character})`).join('<br>')}</p><p>규칙 기반 판독 연습이며, 실제 진동수·스펙트럼 세기는 계산하지 않습니다.</p></article>`
+    : '<article class="learning-card"><b>예상 IR 작용기 밴드</b><p>현재 구조에서 C=O, O–H, N–H, C≡N, C=C 진단 밴드를 찾지 못했습니다.</p></article>';
+  const nmrCard = nmr.supported
+    ? `<article class="learning-card"><b>¹H NMR 신호군 · 적분비</b><p>${nmr.signals.map((signal) => `신호 ${signal.id}: ${signal.integral}H · <b>${signal.multiplicity}</b>`).join('<br>')}</p><p>${nmr.note} n+1은 등가 이웃 H에만 적용하며, 비등가 집합은 dd·ddd처럼 복합으로 표시합니다.</p></article>`
+    : `<article class="learning-card"><b>¹H NMR 신호군</b><p>${nmr.note}</p></article>`;
+  $('learning-spectroscopy').innerHTML = `${irCard}${nmrCard}`;
   $('learning-contacts').innerHTML = summary.contacts.length
     ? summary.contacts.map((contact) => `<article class="learning-card contact"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.distance.toFixed(2)} Å — UFF vdW 기준의 ${(contact.ratio * 100).toFixed(0)}%입니다. 가까운 비결합 접촉은 입체장애의 단서가 될 수 있습니다.</p></article>`).join('')
     : '<p class="learning-muted">강한 근접 비결합 접촉이 없습니다. 이는 반응성이나 안정성을 완전히 예측하는 결과는 아닙니다.</p>';

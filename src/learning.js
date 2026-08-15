@@ -1,4 +1,4 @@
-import { bondBetween, branchAtoms, findRings, isTorsionChain, neighbors, setDihedral } from './model.js';
+import { bondBetween, bondOrderSum, branchAtoms, findRings, isTorsionChain, neighbors, setDihedral } from './model.js';
 import { cross, distance, dot, norm, sub, unit } from './geom.js';
 import { energy, topologyKey, typeAtom } from './uff.js';
 import { UFF_PARAMS } from './params.js';
@@ -10,6 +10,215 @@ const hybridizationFromType = (type) => {
   if (type?.includes('_3')) return 'sp³';
   return '—';
 };
+
+const ATOMIC_NUMBER = { H: 1, B: 5, C: 6, N: 7, O: 8, F: 9, Si: 14, P: 15, S: 16, Cl: 17, Br: 35, I: 53 };
+const atomicNumber = (atom) => ATOMIC_NUMBER[atom?.el] ?? 0;
+
+function incidentBonds(mol, index) {
+  return mol.bonds.filter((bond) => bond.i === index || bond.j === index);
+}
+
+function otherEnd(bond, index) {
+  return bond.i === index ? bond.j : bond.i;
+}
+
+// CIP 비교의 교육용 그래프 전개다. 각 껍질에서 원자번호를 내림차순으로 비교하고,
+// 이중·삼중 결합은 복제 원자(각각 2·3개)로 처리한다. 고리·동위원소·전하의 완전한
+// IUPAC 구현은 아니므로 결과가 동률이면 "판정 보류"로 남긴다.
+function cipLayers(mol, center, root, maxDepth = 8) {
+  const layers = [[atomicNumber(mol.atoms[root])]];
+  let frontier = [{ atom: root, previous: center, visited: new Set([center, root]) }];
+  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
+    const next = [];
+    const layer = [];
+    for (const node of frontier) {
+      for (const bond of incidentBonds(mol, node.atom)) {
+        const neighbour = otherEnd(bond, node.atom);
+        if (neighbour === node.previous) continue;
+        const copies = Math.max(1, Math.round(bond.order));
+        for (let copy = 0; copy < copies; copy++) layer.push(atomicNumber(mol.atoms[neighbour]));
+        if (!node.visited.has(neighbour)) {
+          const visited = new Set(node.visited);
+          visited.add(neighbour);
+          next.push({ atom: neighbour, previous: node.atom, visited });
+        }
+      }
+    }
+    layers.push(layer.sort((a, b) => b - a));
+    frontier = next;
+  }
+  return layers;
+}
+
+function compareCipBranches(mol, center, left, right) {
+  const a = cipLayers(mol, center, left);
+  const b = cipLayers(mol, center, right);
+  const depth = Math.max(a.length, b.length);
+  for (let d = 0; d < depth; d++) {
+    const layerA = a[d] ?? [];
+    const layerB = b[d] ?? [];
+    const length = Math.max(layerA.length, layerB.length);
+    for (let k = 0; k < length; k++) {
+      const delta = (layerA[k] ?? 0) - (layerB[k] ?? 0);
+      if (delta !== 0) return delta > 0 ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function rankCipBranches(mol, center, branches) {
+  const ranked = [...branches].sort((a, b) => compareCipBranches(mol, center, a, b));
+  const distinct = ranked.every((atom, index) => index === 0 || compareCipBranches(mol, center, ranked[index - 1], atom) !== 0);
+  return { ranked, distinct };
+}
+
+export function cipPriorities(mol, center, branches = neighbors(mol, center)) {
+  const { ranked, distinct } = rankCipBranches(mol, center, branches);
+  return { center, distinct, priorities: ranked.map((atom, index) => ({ atom, priority: index + 1, element: mol.atoms[atom]?.el })) };
+}
+
+export function assignRS(mol, center) {
+  const branches = neighbors(mol, center);
+  if (mol.atoms[center]?.el !== 'C' || branches.length !== 4) return null;
+  const { ranked, distinct } = rankCipBranches(mol, center, branches);
+  if (!distinct) return null;
+  const [a, b, c, d] = ranked.map((index) => sub(mol.atoms[index].pos, mol.atoms[center].pos));
+  const determinant = dot(sub(a, d), cross(sub(b, d), sub(c, d)));
+  if (Math.abs(determinant) < 1e-7) return null;
+  return {
+    center,
+    configuration: determinant < 0 ? 'R' : 'S',
+    determinant,
+    priorities: ranked.map((atom, index) => ({ atom, priority: index + 1, element: mol.atoms[atom].el })),
+  };
+}
+
+function perpendicularTo(axis, vector) {
+  const projection = dot(vector, axis);
+  const projected = vector.map((value, index) => value - axis[index] * projection);
+  return norm(projected) > 1e-7 ? unit(projected) : null;
+}
+
+export function assignEZ(mol, bond) {
+  if (!bond || bond.order !== 2 || mol.atoms[bond.i]?.el !== 'C' || mol.atoms[bond.j]?.el !== 'C') return null;
+  const leftBranches = neighbors(mol, bond.i).filter((index) => index !== bond.j);
+  const rightBranches = neighbors(mol, bond.j).filter((index) => index !== bond.i);
+  if (!leftBranches.length || !rightBranches.length) return null;
+  const left = rankCipBranches(mol, bond.i, leftBranches);
+  const right = rankCipBranches(mol, bond.j, rightBranches);
+  if (!left.distinct || !right.distinct) return null;
+  const leftHigh = left.ranked[0];
+  const rightHigh = right.ranked[0];
+  const axis = unit(sub(mol.atoms[bond.j].pos, mol.atoms[bond.i].pos));
+  const leftVector = perpendicularTo(axis, sub(mol.atoms[leftHigh].pos, mol.atoms[bond.i].pos));
+  const rightVector = perpendicularTo(axis, sub(mol.atoms[rightHigh].pos, mol.atoms[bond.j].pos));
+  if (!leftVector || !rightVector) return null;
+  return {
+    bond: [bond.i, bond.j],
+    configuration: dot(leftVector, rightVector) >= 0 ? 'Z' : 'E',
+    leftHigh,
+    rightHigh,
+  };
+}
+
+export function stereochemicalAssignments(mol) {
+  return {
+    rs: mol.atoms.map((_, index) => assignRS(mol, index)).filter(Boolean),
+    ez: mol.bonds.map((bond) => assignEZ(mol, bond)).filter(Boolean),
+  };
+}
+
+function carbonylOxygen(mol, carbon) {
+  return incidentBonds(mol, carbon).find((bond) => bond.order === 2 && mol.atoms[otherEnd(bond, carbon)]?.el === 'O');
+}
+
+export function amideSites(mol) {
+  const sites = [];
+  for (const bond of mol.bonds) {
+    if (bond.order !== 1) continue;
+    const carbon = mol.atoms[bond.i]?.el === 'C' ? bond.i : mol.atoms[bond.j]?.el === 'C' ? bond.j : null;
+    const nitrogen = mol.atoms[bond.i]?.el === 'N' ? bond.i : mol.atoms[bond.j]?.el === 'N' ? bond.j : null;
+    if (carbon === null || nitrogen === null) continue;
+    const carbonyl = carbonylOxygen(mol, carbon);
+    if (!carbonyl) continue;
+    sites.push({
+      carbon,
+      nitrogen,
+      oxygen: otherEnd(carbonyl, carbon),
+      planeAtoms: [otherEnd(carbonyl, carbon), carbon, nitrogen],
+      nitrogenType: typeAtom(mol, nitrogen),
+      planarModel: typeAtom(mol, nitrogen) === 'N_R',
+    });
+  }
+  return sites;
+}
+
+export function predictedIrBands(mol) {
+  const bands = [];
+  const amides = amideSites(mol);
+  const amideCarbons = new Set(amides.map((site) => site.carbon));
+  const carbonyls = mol.atoms.map((atom, index) => atom.el === 'C' && carbonylOxygen(mol, index) ? index : -1).filter((index) => index >= 0);
+  for (const carbon of carbonyls) {
+    const neighbours = neighbors(mol, carbon);
+    const hasOH = neighbours.some((index) => mol.atoms[index]?.el === 'O' && neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
+    const hasOR = neighbours.some((index) => mol.atoms[index]?.el === 'O' && !neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'));
+    if (amideCarbons.has(carbon)) bands.push({ label: '아마이드 C=O', range: '1630–1690 cm⁻¹', character: '강하고 뾰족', note: 'N 비공유전자쌍의 공명 공여가 C=O 파수를 낮춥니다.' });
+    else if (hasOH) bands.push({ label: '카복실산 C=O', range: '1700–1725 cm⁻¹', character: '강하고 뾰족', note: '매우 넓은 산 O–H 밴드와 함께 확인하세요.' });
+    else if (hasOR) bands.push({ label: '에스터 C=O', range: '1730–1750 cm⁻¹', character: '강하고 뾰족', note: '공명 정도와 치환기에 따라 위치가 달라집니다.' });
+    else bands.push({ label: '카보닐 C=O', range: '1670–1780 cm⁻¹', character: '강하고 뾰족', note: '유도체·콘주게이션에 따라 범위를 좁혀야 합니다.' });
+  }
+  const alcoholOH = mol.atoms.some((atom, index) => atom.el === 'O'
+    && neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H')
+    && neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'C'
+      && !carbonylOxygen(mol, next)));
+  if (alcoholOH) bands.push({ label: '알코올 O–H', range: '3200–3600 cm⁻¹', character: '넓음', note: '수소결합 때문에 폭이 넓어질 수 있습니다.' });
+  if (mol.atoms.some((atom, index) => atom.el === 'N' && neighbors(mol, index).some((next) => mol.atoms[next]?.el === 'H'))) bands.push({ label: 'N–H', range: '3300–3500 cm⁻¹', character: '중간', note: '1°/2° 아민·아마이드는 봉우리 수와 위치가 달라질 수 있습니다.' });
+  if (mol.bonds.some((bond) => bond.order === 3 && new Set([mol.atoms[bond.i]?.el, mol.atoms[bond.j]?.el]).has('N'))) bands.push({ label: '니트릴 C≡N', range: '2210–2260 cm⁻¹', character: '날카로움', note: '조용한 영역에 나타나는 진단 밴드입니다.' });
+  if (mol.bonds.some((bond) => bond.order === 2 && mol.atoms[bond.i]?.el === 'C' && mol.atoms[bond.j]?.el === 'C')) bands.push({ label: '알켄 C=C', range: '1620–1680 cm⁻¹', character: '약함', note: 'C=O보다 약해 단독으로는 결론을 내리기 어렵습니다.' });
+  return bands;
+}
+
+function morganLabels(mol, rounds = 5) {
+  let labels = mol.atoms.map((atom, index) => `${atomicNumber(atom)}:${neighbors(mol, index).length}:${bondOrderSum(mol, index)}`);
+  for (let round = 0; round < rounds; round++) {
+    labels = mol.atoms.map((_, index) => {
+      const neighbourLabels = incidentBonds(mol, index)
+        .map((bond) => `${Math.round(bond.order)}×${labels[otherEnd(bond, index)]}`).sort();
+      return `${labels[index]}[${neighbourLabels.join('|')}]`;
+    });
+  }
+  return labels;
+}
+
+const multiplicityName = (count) => ({ 0: 's', 1: 'd', 2: 't', 3: 'q', 4: 'quint', 5: 'sext', 6: 'sept' }[count] ?? `${count + 1}중선`);
+
+export function protonNmrSignals(mol) {
+  const hydrogens = mol.atoms.map((atom, index) => atom.el === 'H' ? index : -1).filter((index) => index >= 0);
+  if (!hydrogens.length) return { supported: false, signals: [], note: '명시적 수소가 있는 구조에서만 적분비와 이웃 수를 계산합니다.' };
+  const labels = morganLabels(mol);
+  const groups = new Map();
+  for (const hydrogen of hydrogens) {
+    const key = labels[hydrogen];
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(hydrogen);
+  }
+  const signals = [...groups.values()].map((members, index) => {
+    const carrier = neighbors(mol, members[0])[0];
+    const carrierElement = mol.atoms[carrier]?.el;
+    if (carrierElement === 'O' || carrierElement === 'N') return { id: index + 1, hydrogens: members, integral: members.length, multiplicity: '넓은 s(교환)', reason: 'O–H/N–H는 빠른 교환으로 보통 갈라짐을 보이지 않습니다.' };
+    const couplingSets = new Map();
+    for (const neighbour of neighbors(mol, carrier).filter((atom) => mol.atoms[atom]?.el === 'C')) {
+      for (const hydrogen of neighbors(mol, neighbour).filter((atom) => mol.atoms[atom]?.el === 'H')) {
+        const key = labels[hydrogen];
+        couplingSets.set(key, (couplingSets.get(key) ?? 0) + 1);
+      }
+    }
+    const counts = [...couplingSets.values()].sort((a, b) => a - b);
+    const multiplicity = !counts.length ? 's' : counts.length === 1 ? multiplicityName(counts[0]) : `복합 (${counts.map(multiplicityName).join(' × ')}; dd/ddd 가능)`;
+    return { id: index + 1, hydrogens: members, integral: members.length, multiplicity, reason: counts.length <= 1 ? 'n+1 규칙은 화학적으로 등가인 이웃 H에만 적용합니다.' : '서로 비등가인 이웃 H 집합이 있어 단순 n+1로 축약하지 않습니다.' };
+  });
+  return { supported: true, signals, note: '신호군은 Morgan 대칭성 근사입니다. 실제 화학적 이동·J값·2차 효과는 계산하지 않습니다.' };
+}
 
 function connectedWithinTwoBonds(mol, start, target) {
   const visited = new Set([start]);

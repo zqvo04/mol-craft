@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { addAtom, addBond, aromatize, createMolecule, valenceUsed } from '../src/model.js';
 import { loadPreset } from '../src/presets.js';
 import { canBond, slotKinds } from '../src/snap.js';
-import { aromaticRingSummary, axialEquatorialLabels, compareStructuralIsomerCandidate, degreeOfUnsaturation, findCloseNonbondedContacts, identifyFunctionalGroups, scanTorsion, torsionInterpretation } from '../src/learning.js';
+import { typeAtom } from '../src/uff.js';
+import { amideSites, aromaticRingSummary, assignEZ, assignRS, axialEquatorialLabels, cipPriorities, compareStructuralIsomerCandidate, degreeOfUnsaturation, findCloseNonbondedContacts, identifyFunctionalGroups, predictedIrBands, protonNmrSignals, scanTorsion, torsionInterpretation } from '../src/learning.js';
 
 test('identifyFunctionalGroups identifies a carbonyl and hydroxyl in acetic acid topology', () => {
   const m = createMolecule();
@@ -85,4 +86,61 @@ test('compareStructuralIsomerCandidate distinguishes same connectivity, changed 
   assert.equal(compareStructuralIsomerCandidate(reference, same).kind, 'same-connectivity');
   assert.equal(compareStructuralIsomerCandidate(reference, connectivityChanged).kind, 'constitutional-isomer-candidate');
   assert.equal(compareStructuralIsomerCandidate(reference, formulaChanged).kind, 'different-formula');
+});
+
+test('CIP uses atomic number ordering and signed 3D geometry for R/S assignment', () => {
+  const m = createMolecule();
+  const center = addAtom(m, 'C', [0, 0, 0]);
+  const br = addAtom(m, 'Br', [1, 0, 0]);
+  const cl = addAtom(m, 'Cl', [0, 1, 0]);
+  const f = addAtom(m, 'F', [-1, 0, 0]);
+  const h = addAtom(m, 'H', [0, 0, -1]);
+  [br, cl, f, h].forEach((index) => addBond(m, center, index));
+  assert.deepEqual(cipPriorities(m, center).priorities.map(({ element }) => element), ['Br', 'Cl', 'F', 'H']);
+  assert.equal(assignRS(m, center).configuration, 'S');
+  m.atoms[cl].pos[1] = -1;
+  assert.equal(assignRS(m, center).configuration, 'R');
+});
+
+test('E/Z compares CIP-high substituents on each alkene carbon instead of cis/trans labels', () => {
+  const m = createMolecule();
+  const left = addAtom(m, 'C', [-0.6, 0, 0]);
+  const right = addAtom(m, 'C', [0.6, 0, 0]);
+  const cl = addAtom(m, 'Cl', [-1.4, 1, 0]);
+  const hLeft = addAtom(m, 'H', [-1.4, -1, 0]);
+  const br = addAtom(m, 'Br', [1.4, 1, 0]);
+  const hRight = addAtom(m, 'H', [1.4, -1, 0]);
+  addBond(m, left, right, 2); addBond(m, left, cl); addBond(m, left, hLeft); addBond(m, right, br); addBond(m, right, hRight);
+  assert.equal(assignEZ(m, m.bonds[0]).configuration, 'Z');
+  m.atoms[br].pos[1] = -1;
+  m.atoms[hRight].pos[1] = 1;
+  assert.equal(assignEZ(m, m.bonds[0]).configuration, 'E');
+});
+
+test('amide nitrogen is promoted to an sp2 resonance type and gives an amide IR teaching band', () => {
+  const m = createMolecule();
+  const methyl = addAtom(m, 'C', [-1.5, 0, 0]);
+  const carbonyl = addAtom(m, 'C', [0, 0, 0]);
+  const oxygen = addAtom(m, 'O', [1.2, 0, 0]);
+  const nitrogen = addAtom(m, 'N', [0, 1.2, 0]);
+  const hN = addAtom(m, 'H', [0, 2.1, 0]);
+  addBond(m, methyl, carbonyl); addBond(m, carbonyl, oxygen, 2); addBond(m, carbonyl, nitrogen); addBond(m, nitrogen, hN);
+  assert.equal(typeAtom(m, nitrogen), 'N_R');
+  assert.deepEqual(amideSites(m).map(({ planarModel }) => planarModel), [true]);
+  assert.deepEqual(amideSites(m)[0].planeAtoms, [oxygen, carbonyl, nitrogen]);
+  assert.ok(predictedIrBands(m).some((band) => band.label === '아마이드 C=O' && band.range === '1630–1690 cm⁻¹'));
+});
+
+test('ethanol-style explicit hydrogens yield a 3:2:1 integral pattern and preserve the OH exchange exception', () => {
+  const m = createMolecule();
+  const c0 = addAtom(m, 'C', [0, 0, 0]); const c1 = addAtom(m, 'C', [1.5, 0, 0]); const o = addAtom(m, 'O', [2.7, 0, 0]);
+  addBond(m, c0, c1); addBond(m, c1, o);
+  [[-0.5, 0.8, 0], [-0.5, -0.8, 0], [0, 0, 1]].forEach((pos) => addBond(m, c0, addAtom(m, 'H', pos)));
+  [[1.5, 0.8, 0], [1.5, -0.8, 0]].forEach((pos) => addBond(m, c1, addAtom(m, 'H', pos)));
+  addBond(m, o, addAtom(m, 'H', [3.4, 0, 0]));
+  const nmr = protonNmrSignals(m);
+  assert.deepEqual(nmr.signals.map((signal) => signal.integral), [3, 2, 1]);
+  assert.equal(nmr.signals.find((signal) => signal.integral === 3).multiplicity, 't');
+  assert.equal(nmr.signals.find((signal) => signal.integral === 2).multiplicity, 'q');
+  assert.equal(nmr.signals.find((signal) => signal.integral === 1).multiplicity, '넓은 s(교환)');
 });
