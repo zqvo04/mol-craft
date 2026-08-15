@@ -1,5 +1,5 @@
 import {
-  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom,
+  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom, valenceUsed,
 } from './model.js';
 import { MAX_VALENCE, EXPANDED_VALENCE, UFF_PARAMS } from './params.js';
 import { typeAtom, bondLength } from './uff.js';
@@ -63,7 +63,7 @@ export function canBond(mol, i, j) {
   let reason = 'ok';
   for (const idx of [i, j]) {
     const el = mol.atoms[idx].el;
-    const used = bondOrderSum(mol, idx);
+    const used = valenceUsed(mol, idx);
     const normal = MAX_VALENCE[el];
     const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
@@ -90,7 +90,7 @@ export function cycleBondOrder(mol, bond) {
       const normal = MAX_VALENCE[el];
       if (normal === undefined) return { ok: false, reason: 'unsupported-element' };
       const capMax = EXPANDED_VALENCE[el] ?? normal;
-      if (bondOrderSum(mol, idx) + delta > capMax) return { ok: false, reason: 'valence-full' };
+      if (valenceUsed(mol, idx) + delta > capMax) return { ok: false, reason: 'valence-full' };
     }
   }
   bond.order = next;
@@ -291,8 +291,11 @@ export function slotKinds(mol, anchor) {
   const el = mol.atoms[anchor].el;
   const normal = MAX_VALENCE[el];
   const capMax = EXPANDED_VALENCE[el] ?? normal;
-  const room = capMax === undefined ? 0 : Math.max(0, capMax - bondOrderSum(mol, anchor));
-  const lonePairSlots = LONE_PAIRS[el] ?? 0;
+  const room = capMax === undefined ? 0 : Math.max(0, capMax - valenceUsed(mol, anchor));
+  // 피롤형 N·푸란형 O의 비공유전자쌍은 방향족 π계에 이미 공여되어 '붙일 수 없는
+  // 보라색 비공유전자쌍 슬롯'으로 다시 그리면 안 된다. 결합 시도는 valence-full로
+  // 일관되게 막고, 학습 노트의 방향족 카드가 그 전자쌍의 역할을 설명한다.
+  const lonePairSlots = mol.atoms[anchor].aromaticLonePair ? 0 : (LONE_PAIRS[el] ?? 0);
   return openSlots(mol, anchor).map((dir, k) => ({
     dir, kind: k >= room && k < room + lonePairSlots ? 'lonepair' : 'bond',
   }));
@@ -316,7 +319,7 @@ export function stability(mol) {
     // 원자가 초과는 이제 canBond가 막지 않으므로(레고처럼 일단 끼울 수 있게 허용) 여기서
     // 직접 재계산해 경고한다. capMax(EXPANDED_VALENCE)까지는 초원자가로 약한 경고,
     // 그마저 넘기면(예: CH5) 위험으로 표시한다.
-    const used = bondOrderSum(mol, i);
+    const used = valenceUsed(mol, i);
     const normal = MAX_VALENCE[el];
     const capMax = EXPANDED_VALENCE[el] ?? normal;
     if (normal !== undefined && used > capMax) {
@@ -364,7 +367,7 @@ export function hudSummary(st, max = 3) {
 // 바로 나온다(음수면 원자가 초과 — syncHydrogens가 그만큼 뗀다).
 export function implicitH(mol, i) {
   const max = MAX_VALENCE[mol.atoms[i].el];
-  return max === undefined ? 0 : max - bondOrderSum(mol, i);
+  return max === undefined ? 0 : max - valenceUsed(mol, i);
 }
 
 // Hill 표기 분자식(탄소 있으면 C, H 먼저 → 나머지 알파벳순; 없으면 전부 알파벳순).

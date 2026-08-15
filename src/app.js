@@ -13,7 +13,8 @@ import { add, scale, sub, rotateAround } from './geom.js';
 import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
-import { scanTorsion, summarizeStructure, torsionInterpretation } from './learning.js';
+import { compareStructuralIsomerCandidate, scanTorsion, summarizeStructure, torsionInterpretation } from './learning.js';
+import { createMenuSelect } from './menu-select.js';
 
 const ELEMENTS = ['H', 'C', 'N', 'O', 'F', 'S', 'P', 'Cl', 'Si', 'B', 'Br', 'I'];
 
@@ -34,6 +35,7 @@ const state = {
   ringTwist: 0, // 구조 단위의 앵커 결합축 회전 각도. R 키로 30°씩 회전한다.
   ringGhost: null, // { anchor, placed, ok } — 구조 단위 고스트 미리보기
   undoStack: [],
+  isomerReference: null,
 };
 
 const LS_KEY = 'molcraft:last';
@@ -288,7 +290,26 @@ function updateLearningPanel() {
   const hybridization = Object.entries(summary.hybridization)
     .filter(([key]) => key !== '—')
     .map(([key, count]) => `<span class="learning-chip"><b>${key}</b> ${count}개</span>`).join('') || '<span class="learning-muted">현재 원자 타입을 해석할 수 없습니다.</span>';
-  $('learning-overview').innerHTML = `<p><b>${summary.atomCount}</b>개 원자 · <b>${summary.bondCount}</b>개 결합</p><div class="learning-chip-row">${hybridization}</div>`;
+  const aromatic = summary.aromaticRings.length
+    ? `<span class="learning-chip"><b>방향족</b> ${summary.aromaticRings.map((ring) => `${ring.piElectrons}π`).join(' · ')}</span>` : '';
+  $('learning-overview').innerHTML = `<p><b>${summary.atomCount}</b>개 원자 · <b>${summary.bondCount}</b>개 결합 · <b>${summary.degreeOfUnsaturation.formula}</b></p><div class="learning-chip-row">${hybridization}${aromatic}</div>`;
+  const dou = summary.degreeOfUnsaturation;
+  const douText = dou.valid
+    ? `<b>DoU ${dou.value}</b> · 고리와 π 결합의 총수입니다. 현재 구조의 결합차수·고리 수와 맞는지 확인하세요.`
+    : `<b>DoU ${dou.value}</b> · 수소 수가 완결되지 않았거나 현재 구조가 중성 닫힌껍질 규칙과 맞지 않습니다. 수소 채우기 후 다시 확인하세요.`;
+  const aromaticCards = summary.aromaticRings.map((ring) => {
+    const hetero = ring.heteroatoms.map((index) => state.mol.atoms[index].el).join(', ');
+    return `<article class="learning-card concept"><b>${ring.piElectrons}π 방향족 고리${hetero ? ` · 헤테로원자 ${hetero}` : ''}</b><p>원자별 π 기여 합이 4n+2인지 확인합니다. 피롤형 N·푸란형 O의 비공유쌍은 π계에 2전자를 공여합니다.</p></article>`;
+  }).join('');
+  const isomer = state.isomerReference ? compareStructuralIsomerCandidate(state.isomerReference, state.mol) : null;
+  const isomerStatus = !isomer
+    ? '<p>현재 구조를 기준으로 지정한 뒤, 결합 연결을 바꾸어 비교하세요.</p>'
+    : isomer.kind === 'same-connectivity'
+      ? `<p><b>같은 연결성</b> · 기준 구조와 분자식 ${isomer.referenceFormula}, 연결성 지문이 같습니다.</p>`
+      : isomer.kind === 'constitutional-isomer-candidate'
+        ? `<p><b>구조 이성질체 후보</b> · 두 구조 모두 ${isomer.referenceFormula}이지만 연결성 지문이 다릅니다. 실제 구조 이성질체 판단 전 결합 연결을 다시 확인하세요.</p>`
+        : `<p><b>분자식이 다름</b> · 기준 ${isomer.referenceFormula} / 현재 ${isomer.candidateFormula}. 구조 이성질체 비교 대상이 아닙니다.</p>`;
+  $('learning-validation').innerHTML = `<article class="learning-card concept"><p>${douText}</p></article><article class="learning-card"><b>구조 이성질체 점검</b>${isomerStatus}<button class="learning-action" data-isomer-reference>현재 구조를 기준으로 지정</button><p>같은 분자식과 다른 연결성은 구조 이성질체의 단서입니다. 이 판정은 연결성 지문 기반의 학습 보조이며, 그래프 동형 판정이나 입체이성질체 판정은 아닙니다.</p></article>${aromaticCards}`;
   const candidateCenters = (state.selection.length ? state.selection : state.mol.atoms.map((_, i) => i))
     .filter((index) => neighbors(state.mol, index).length >= 2)
     .slice(0, 3);
@@ -309,6 +330,11 @@ function updateLearningPanel() {
     ? summary.contacts.map((contact) => `<article class="learning-card contact"><b>${state.mol.atoms[contact.i].el}${contact.i} · ${state.mol.atoms[contact.j].el}${contact.j}</b><p>${contact.distance.toFixed(2)} Å — UFF vdW 기준의 ${(contact.ratio * 100).toFixed(0)}%입니다. 가까운 비결합 접촉은 입체장애의 단서가 될 수 있습니다.</p></article>`).join('')
     : '<p class="learning-muted">강한 근접 비결합 접촉이 없습니다. 이는 반응성이나 안정성을 완전히 예측하는 결과는 아닙니다.</p>';
   const selection = state.selection;
+  const strainRows = Object.entries(state.lastEnergy?.byType ?? {})
+    .filter(([key]) => ['angle', 'torsion', 'vdw'].includes(key))
+    .map(([key, value]) => `<span>${key === 'angle' ? '각 스트레인' : key === 'torsion' ? '비틀림 스트레인' : '입체 반발(vdW)'}</span><b>${value.toFixed(2)}</b>`).join('');
+  const axial = summary.axialEquatorial.slice(0, 8).map((entry) => `${state.mol.atoms[entry.carbon].el}${entry.carbon}–${state.mol.atoms[entry.substituent].el}${entry.substituent}: ${entry.kind === 'axial' ? '축(axial)' : '평면(equatorial)'}`).join('<br>');
+  $('learning-conformation').innerHTML = `<article class="learning-card concept"><b>UFF 상대 항 분해</b><div class="learning-energy">${strainRows || '<span>스트레인 항</span><b>—</b>'}</div><p>같은 분자의 배좌를 비교할 때만 정성적으로 해석하세요. 문헌 장벽과 UFF 수치는 다를 수 있습니다.</p></article>${axial ? `<article class="learning-card"><b>6원 고리 치환기</b><p>${axial}</p><p>의자형 뒤집기에서는 axial과 equatorial이 서로 교환됩니다.</p></article>` : '<p class="learning-muted">6원 탄소 고리에서 고리 밖 결합을 찾으면 axial/equatorial 라벨을 표시합니다.</p>'}`;
   const torsion = selection.length === 4 && isTorsionChain(state.mol, selection) && branchAtoms(state.mol, selection[1], selection[2]) !== null
     ? torsionInterpretation(measure(state.mol, selection))
     : null;
@@ -316,6 +342,16 @@ function updateLearningPanel() {
     ? `<article class="learning-card"><b>${torsion.title}</b><p>${torsion.note}</p></article>`
     : '<p class="learning-muted">이어진 원자 4개를 순서대로 선택하면 이면각 배치의 교육용 해석이 나타납니다.</p>';
 }
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-isomer-reference]')) return;
+  state.isomerReference = {
+    atoms: state.mol.atoms.map((atom) => ({ ...atom, pos: [...atom.pos] })),
+    bonds: state.mol.bonds.map((bond) => ({ ...bond })),
+  };
+  toast('현재 구조를 이성질체 비교 기준으로 저장했습니다');
+  render();
+});
 
 const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: '비틀림', vdw: '반데르발스' };
 
@@ -477,6 +513,7 @@ function attachAtom(anchor, { dir } = {}) {
     state.mol.atoms.pop();
     toast(REASON_MSG[check.reason] ?? '결합할 수 없습니다', 'err');
     playClick(180); // 실패는 낮은 음
+    signalViewer('error');
     return;
   }
 
@@ -494,6 +531,7 @@ function attachAtom(anchor, { dir } = {}) {
   // 움직여서 "본 자리에 박힌다"는 감각을 깨뜨렸다).
   checkSnaps();
   render();
+  signalViewer('success');
 }
 
 // 원자 하나를 뗀다(지우개 도구). 원자가 하나뿐이면 남길 것이 없으니 막는다.
@@ -643,6 +681,24 @@ if (isShareEnabled()) {
 
 const viewerEl = $('viewer');
 
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
+function pulseControl(control) {
+  if (!control || prefersReducedMotion()) return;
+  control.classList.remove('motion-confirm');
+  requestAnimationFrame(() => control.classList.add('motion-confirm'));
+  window.setTimeout(() => control.classList.remove('motion-confirm'), 260);
+}
+
+function signalViewer(kind) {
+  const className = kind === 'error' ? 'interaction-error' : kind === 'select' ? 'selection-pulse' : 'interaction-success';
+  viewerEl.classList.remove('interaction-error', 'selection-pulse', 'interaction-success');
+  requestAnimationFrame(() => viewerEl.classList.add(className));
+  window.setTimeout(() => viewerEl.classList.remove(className), prefersReducedMotion() ? 120 : 480);
+}
+
 function setTool(tool) {
   state.tool = tool;
   clearGhost();
@@ -655,8 +711,10 @@ function setTool(tool) {
     b.classList.toggle('active', matches);
   });
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('active', tool === 'place' && b.dataset.el === state.element));
+  document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('element-picked', tool === 'place' && b.dataset.el === state.element));
   document.querySelectorAll('#structure-library [data-template]').forEach((b) => b.classList.toggle('active', tool === 'ring' && b.dataset.template === state.ringTemplate));
   $('structure-library-toggle').classList.toggle('active', tool === 'ring');
+  pulseControl(document.querySelector(`#tools button[data-tool="${tool}"]`) ?? (tool === 'place' ? document.querySelector(`#palette button[data-el="${state.element}"]`) : $('structure-library-toggle')));
   updateToolHint();
 }
 
@@ -703,14 +761,15 @@ $('palette').onclick = (ev) => {
   state.element = btn.dataset.el;
   state.slot = 0;
   setTool('place');
+  pulseControl(btn);
 };
 
 // ---- 구조 단위 라이브러리 --------------------------------------------------
 // 고리와 기능기를 편집 도구와 분리한다. 학생은 원소 팔레트의 확장으로 인식하고,
 // 선택 뒤에는 기존의 안정적인 고스트/원자가 검사 경로로 들어간다.
-const structureLibraryWrap = $('structure-library-wrap');
 const structureLibrary = $('structure-library');
 const structureLibraryToggle = $('structure-library-toggle');
+const overlayRoot = $('overlay-root');
 const LIBRARY_GROUPS = [
   ['ring', '탄소 고리'], ['heteroring', '헤테로고리'], ['functional', '기능기'],
 ];
@@ -727,28 +786,59 @@ function renderStructureLibrary() {
   structureLibrary.innerHTML = `<div class="structure-library-head"><div><strong>구조 단위</strong><p>앵커 원자를 조준해 미리본 뒤 클릭하세요.</p></div><button data-library-close aria-label="구조 단위 라이브러리 닫기">닫기</button></div>${sections}`;
 }
 
-function setStructureLibraryOpen(open) {
+function positionStructureLibrary() {
+  if (structureLibrary.hidden) return;
+  const mobile = window.matchMedia('(max-width: 720px)').matches;
+  structureLibrary.classList.toggle('structure-library-sheet', mobile);
+  if (mobile) {
+    structureLibrary.style.removeProperty('left');
+    structureLibrary.style.removeProperty('top');
+    return;
+  }
+  const rect = structureLibraryToggle.getBoundingClientRect();
+  const gap = 9;
+  const width = Math.min(420, window.innerWidth - 30);
+  const maxHeight = Math.min(510, window.innerHeight - 180);
+  const left = Math.max(15, Math.min(rect.left, window.innerWidth - width - 15));
+  const preferBelow = rect.bottom + gap + Math.min(maxHeight, 360) <= window.innerHeight - 12;
+  const top = preferBelow
+    ? Math.min(rect.bottom + gap, window.innerHeight - 12)
+    : Math.max(12, rect.top - gap - Math.min(maxHeight, 360));
+  structureLibrary.style.left = `${Math.round(left)}px`;
+  structureLibrary.style.top = `${Math.round(top)}px`;
+}
+
+function setStructureLibraryOpen(open, { returnFocus = false } = {}) {
+  if (open && overlayRoot && structureLibrary.parentElement !== overlayRoot) overlayRoot.appendChild(structureLibrary);
   structureLibrary.hidden = !open;
   structureLibraryToggle.setAttribute('aria-expanded', String(open));
-  if (open) structureLibrary.querySelector('button[data-template]')?.focus();
+  if (open) {
+    positionStructureLibrary();
+    requestAnimationFrame(() => structureLibrary.querySelector('button[data-template]')?.focus());
+  } else if (returnFocus) structureLibraryToggle.focus();
 }
 
 renderStructureLibrary();
 structureLibraryToggle.onclick = () => setStructureLibraryOpen(structureLibrary.hidden);
 structureLibrary.onclick = (ev) => {
-  if (ev.target.closest('[data-library-close]')) { setStructureLibraryOpen(false); structureLibraryToggle.focus(); return; }
+  if (ev.target.closest('[data-library-close]')) { setStructureLibraryOpen(false, { returnFocus: true }); return; }
   const card = ev.target.closest('[data-template]');
   if (!card) return;
   state.ringTemplate = card.dataset.template;
   state.ringTwist = 0;
-  setStructureLibraryOpen(false);
+  card.classList.add('selected-confirm');
+  window.setTimeout(() => setStructureLibraryOpen(false), prefersReducedMotion() ? 0 : 110);
   setTool('ring');
   toast(`${RING_TEMPLATES[state.ringTemplate].name} 삽입: 원자를 조준하세요`);
 };
-document.addEventListener('click', (ev) => { if (!structureLibraryWrap.contains(ev.target)) setStructureLibraryOpen(false); });
-document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && !structureLibrary.hidden) { setStructureLibraryOpen(false); structureLibraryToggle.focus(); }
+document.addEventListener('click', (ev) => {
+  if (!structureLibraryToggle.contains(ev.target) && !structureLibrary.contains(ev.target)) setStructureLibraryOpen(false);
 });
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !structureLibrary.hidden) { setStructureLibraryOpen(false, { returnFocus: true }); }
+});
+window.addEventListener('resize', positionStructureLibrary);
+window.addEventListener('scroll', positionStructureLibrary, { capture: true, passive: true });
 
 // ---- 붙이기 고스트 미리보기 -----------------------------------------------
 // idealDirection/canBond를 attachAtom과 똑같이 호출해 "미리 보여준 자리 = 실제로 붙는 자리"를
@@ -923,6 +1013,7 @@ function attachRing(anchor) {
   clearRingGhost();
   checkSnaps();
   render();
+  signalViewer('success');
 }
 
 viewerEl.addEventListener('pointermove', (ev) => {
@@ -987,6 +1078,7 @@ function handleAtomClick(hit, shiftKey) {
   if (state.tool === 'bond') { handleBondClick(hit); return; }
   if (shiftKey) toggleSelect(hit);
   else { state.selection = [hit]; render(); }
+  signalViewer('select');
 }
 
 // 결합 도구로 결합선을 클릭하면 차수를 1 -> 2 -> 3 -> 1로 돌린다(원자를 클릭하면
@@ -996,6 +1088,7 @@ function handleBondOrderClick(bond) {
   if (!r.ok) {
     toast(REASON_MSG[r.reason] ?? '차수를 바꿀 수 없습니다', 'err');
     playClick(180);
+    signalViewer('error');
     return;
   }
   // cycleBondOrder가 이미 제자리에서 바꿔버렸으므로, 되돌리기 스냅샷은 되돌린 뒤에 찍는다.
@@ -1007,6 +1100,7 @@ function handleBondOrderClick(bond) {
   toast(`결합 차수 ${r.order}`);
   checkSnaps();
   render();
+  signalViewer('success');
 }
 
 // '결합' 도구: 첫 클릭은 앵커를 대기시키고, 두 번째 클릭이 그 앵커를 실제로 잇는다
@@ -1023,12 +1117,14 @@ function handleBondClick(hit) {
     toast(REASON_MSG[check.reason] ?? '결합할 수 없습니다', 'err');
     playClick(180);
     render();
+    signalViewer('error');
     return;
   }
   if (!bondDistanceOk(state.mol, anchor, hit)) {
     toast(REASON_MSG['too-far'], 'err');
     playClick(180);
     render();
+    signalViewer('error');
     return;
   }
   pushUndo();
@@ -1041,6 +1137,7 @@ function handleBondClick(hit) {
   playClick(880);
   checkSnaps();
   render();
+  signalViewer('success');
 }
 
 // ---- 일반 클릭(드래그 없는 pointerup) -------------------------------------
@@ -1050,13 +1147,14 @@ viewerEl.addEventListener('click', (ev) => {
     if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
     else if (state.ghost.kinds[state.ghost.slot] === 'lonepair') {
       toast('비공유 전자쌍 자리입니다 — 원자가 들어갈 수 없습니다', 'err');
-    } else toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err');
+      signalViewer('error');
+    } else { toast(REASON_MSG[state.ghost.reason] ?? '결합할 수 없습니다', 'err'); signalViewer('error'); }
     return;
   }
   if (state.tool === 'ring') {
     if (!state.ringGhost) return;
     if (state.ringGhost.ok) attachRing(state.ringGhost.anchor);
-    else toast(REASON_MSG[state.ringGhost.reason] ?? '고리를 붙일 수 없습니다', 'err');
+    else { toast(REASON_MSG[state.ringGhost.reason] ?? '고리를 붙일 수 없습니다', 'err'); signalViewer('error'); }
     return;
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
@@ -1299,104 +1397,13 @@ $('fill-h').onclick = () => {
 // 상태값(.value, change 이벤트)으로만 쓰고, 버튼+목록을 직접 그려 그 위에서
 // 클릭·키보드를 처리한 뒤 select.value를 갱신하고 진짜 change 이벤트를
 // 쏴서 기존 onchange 배선을 그대로 재사용한다 — 선택 로직 자체는 손대지 않는다.
-function enhanceSelect(select) {
-  const wrap = document.createElement('div');
-  wrap.className = 'dropdown';
-  select.before(wrap);
-  wrap.appendChild(select);
-  select.classList.add('dropdown-native');
-  select.tabIndex = -1;
-  select.setAttribute('aria-hidden', 'true');
-
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = 'dropdown-trigger';
-  trigger.setAttribute('aria-haspopup', 'listbox');
-  trigger.setAttribute('aria-expanded', 'false');
-  if (select.title) trigger.title = select.title;
-  const label = document.createElement('span');
-  label.className = 'dropdown-label';
-  trigger.append(label, iconChevron());
-  wrap.appendChild(trigger);
-
-  const list = document.createElement('ul');
-  list.className = 'dropdown-list';
-  list.setAttribute('role', 'listbox');
-  list.hidden = true;
-  wrap.appendChild(list);
-
-  let optionEls = [];
-  const buildOptions = () => {
-    list.innerHTML = '';
-    optionEls = [...select.options].map((opt) => {
-      const li = document.createElement('li');
-      li.setAttribute('role', 'option');
-      li.className = 'dropdown-option';
-      li.textContent = opt.textContent;
-      li.dataset.value = opt.value;
-      li.tabIndex = -1;
-      list.appendChild(li);
-      return li;
-    });
-  };
-  const syncLabel = () => {
-    label.textContent = select.options[select.selectedIndex]?.textContent ?? '';
-    for (const li of optionEls) li.setAttribute('aria-selected', String(li.dataset.value === select.value));
-  };
-  const close = () => { list.hidden = true; trigger.setAttribute('aria-expanded', 'false'); };
-  const open = () => {
-    list.hidden = false;
-    trigger.setAttribute('aria-expanded', 'true');
-    (optionEls.find((li) => li.dataset.value === select.value) ?? optionEls[0])?.focus();
-  };
-  const choose = (li) => {
-    select.value = li.dataset.value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    syncLabel();
-    close();
-    trigger.focus();
-  };
-
-  trigger.addEventListener('click', () => (list.hidden ? open() : close()));
-  list.addEventListener('click', (ev) => {
-    const li = ev.target.closest('.dropdown-option');
-    if (li) choose(li);
-  });
-  list.addEventListener('keydown', (ev) => {
-    const i = optionEls.indexOf(document.activeElement);
-    if (ev.key === 'ArrowDown') { ev.preventDefault(); optionEls[Math.min(optionEls.length - 1, i + 1)]?.focus(); }
-    else if (ev.key === 'ArrowUp') { ev.preventDefault(); optionEls[Math.max(0, i - 1)]?.focus(); }
-    else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); choose(document.activeElement); }
-    else if (ev.key === 'Escape' || ev.key === 'Tab') { close(); trigger.focus(); }
-  });
-  document.addEventListener('click', (ev) => { if (!wrap.contains(ev.target)) close(); });
-
-  buildOptions();
-  syncLabel();
-}
-
-function iconChevron() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'chev');
-  svg.setAttribute('viewBox', '0 0 10 10');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.6');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M1.5 3.5 5 7l3.5-3.5');
-  svg.appendChild(path);
-  return svg;
-}
-
 $('colorby').onchange = (ev) => {
   state.colorBy = ev.target.value;
   document.body.dataset.colorby = state.colorBy;
   render();
 };
 document.body.dataset.colorby = state.colorBy;
-enhanceSelect($('colorby'));
+createMenuSelect($('colorby'));
 
 setTool('view');
 
@@ -1415,7 +1422,7 @@ $('preset').onchange = (ev) => {
   const note = PRESETS[ev.target.value].note;
   if (note) toast(note);
 };
-enhanceSelect($('preset'));
+createMenuSelect($('preset'));
 
 // 카탈로그에서 PubChem SDF 구조를 불러오면 기존 조립·분석 상태로 교체한다.
 // 현재 UFF 지원 원소만 catalog.js에서 이 이벤트를 보낼 수 있어 분석 경로는 그대로 안전하다.

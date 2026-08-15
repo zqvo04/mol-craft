@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --test",
     "test:ui": "node scripts/verify-browser-ui.mjs",
+    "audit:catalog-images": "node scripts/audit-catalog-images.mjs --limit 300",
     "serve": "python3 -m http.server 8000"
   }
 }

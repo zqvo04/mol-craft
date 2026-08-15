@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normaliseRecord, parseSdf, searchCatalog } from '../src/catalog.js';
+import { normaliseRecord, parseSdf, searchCatalog, structureFallbackText, structureUrl, STRUCTURE_IMAGE_STATES } from '../src/catalog.js';
 
 const records = [
   { id: 1, name: '2-acetyloxybenzoic acid', commonName: 'Aspirin', molecularFormula: 'C9H8O4', casNumber: '50-78-2', canonicalSmiles: 'CC(=O)OC1=CC=CC=C1C(=O)O', category: 'drug', molecularWeight: '180.16' },
@@ -21,4 +21,12 @@ test('normaliseRecord converts Supabase snake case to catalogue field names', ()
 test('parseSdf creates the existing molecule model shape from an SDF record', () => {
   const sdf = `water\n  mol-craft\n\n  3  2  0  0  0  0            999 V2000\n    0.0000    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0\n    0.7586    0.5043    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0\n   -0.7586    0.5043    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0\n  1  2  1  0\n  1  3  1  0\nM  END\n`;
   assert.deepEqual(parseSdf(sdf), { atoms: [{ el: 'O', pos: [0, 0, 0] }, { el: 'H', pos: [0.7586, 0.5043, 0] }, { el: 'H', pos: [-0.7586, 0.5043, 0] }], bonds: [{ i: 0, j: 1, order: 1 }, { i: 0, j: 2, order: 1 }] });
+});
+
+test('structure image helpers expose a bounded loading state model and a formula fallback', () => {
+  assert.deepEqual(STRUCTURE_IMAGE_STATES, ['loading', 'ready', 'retrying', 'fallback', 'unavailable']);
+  assert.match(structureUrl({ pubchemCid: 2244 }), /compound\/cid\/2244\/PNG/);
+  assert.equal(structureUrl({}), '');
+  assert.equal(structureFallbackText({ molecularFormula: 'C9H8O4', commonName: 'Aspirin' }), 'C9H8O4');
+  assert.equal(structureFallbackText({ commonName: 'Aspirin' }), 'Aspirin');
 });

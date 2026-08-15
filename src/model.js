@@ -160,19 +160,36 @@ export function findRings(mol) {
   });
 }
 
-// 방향족 인식: 케쿨레 구조(고리 안에서 단일/이중 결합이 번갈아 그려진 상태)를 감지해
-// 고리 원자를 C_R/N_R/O_R로, 고리 결합을 order 1.5로 승격한다. 완전한 휘켈 판정은 하지
-// 않는다 — 5/6원 고리, 전부 C/N/O, 원자마다 이웃 정확히 3개(sp2 가능), 원자마다 이중결합
-// (고리 안이든 밖이든) 하나 이상이라는 케쿨레 흔적만 확인한다.
+// 방향족 인식: 고리 원자별 π 전자 기여를 세는 간단한 휘켈 판정이다. 벤젠형만 통과시키던
+// 이전 규칙과 달리 피리딘형 N(1e⁻), 피롤형 N(비공유쌍 2e⁻), 푸란형 O(비공유쌍 2e⁻)를
+// 분리한다. 완전한 SSSR·공명 기여도 계산은 아니며, 5/6원 단일 고리의 교육용 인식기다.
+function aromaticContribution(mol, ring, i) {
+  const ringSet = new Set(ring);
+  const ringBonds = mol.bonds.filter((bond) => ringSet.has(bond.i) && ringSet.has(bond.j)
+    && (bond.i === i || bond.j === i));
+  const hasRingDouble = ringBonds.some((bond) => bond.order === 2 || bond.order === 1.5);
+  const el = mol.atoms[i].el;
+  if (el === 'C') return hasRingDouble ? 1 : 0;
+  if (el === 'N') return hasRingDouble ? 1 : 2;
+  if (el === 'O') return hasRingDouble ? 0 : 2;
+  return 0;
+}
+
 export function aromatize(mol) {
   for (const ring of findRings(mol)) {
     if (ring.length !== 5 && ring.length !== 6) continue;
     if (!ring.every((i) => ['C', 'N', 'O'].includes(mol.atoms[i].el))) continue;
-    if (!ring.every((i) => neighbors(mol, i).length === 3)) continue;
-    const hasDoubleBond = (i) => mol.bonds.some((b) => (b.i === i || b.j === i) && b.order === 2);
-    if (!ring.every((i) => hasDoubleBond(i) || mol.atoms[i].type?.endsWith('_R'))) continue;
+    const ringSet = new Set(ring);
+    if (!ring.every((i) => neighbors(mol, i).filter((j) => ringSet.has(j)).length === 2)) continue;
+    const contributions = ring.map((i) => aromaticContribution(mol, ring, i));
+    const piElectrons = contributions.reduce((sum, value) => sum + value, 0);
+    if (piElectrons < 2 || (piElectrons - 2) % 4 !== 0) continue;
 
-    for (const i of ring) mol.atoms[i].type = `${mol.atoms[i].el}_R`;
+    ring.forEach((i, index) => {
+      mol.atoms[i].type = `${mol.atoms[i].el}_R`;
+      mol.atoms[i].aromaticPiContribution = contributions[index];
+      mol.atoms[i].aromaticLonePair = contributions[index] === 2;
+    });
     for (let k = 0; k < ring.length; k++) {
       const bond = bondBetween(mol, ring[k], ring[(k + 1) % ring.length]);
       if (bond) bond.order = 1.5;
@@ -182,6 +199,16 @@ export function aromatize(mol) {
 
 export const bondOrderSum = (mol, i) =>
   mol.bonds.filter((b) => b.i === i || b.j === i).reduce((s, b) => s + b.order, 0);
+
+// 방향족 비공유쌍이 π계에 공여되는 피롤형 N·푸란형 O는 1.5 결합 두 개를 그대로
+// 더하면 형식 원자가가 과대 계산된다. 실제 원자가 검사에는 그 두 결합의 π 분획을 한 번만
+// 빼야 한다. 일반 C_R·피리딘형 N은 이 보정 대상이 아니다.
+export function valenceUsed(mol, i) {
+  const raw = bondOrderSum(mol, i);
+  if (!mol.atoms[i]?.aromaticLonePair) return raw;
+  const aromaticCount = mol.bonds.filter((bond) => (bond.i === i || bond.j === i) && bond.order === 1.5).length;
+  return raw - aromaticCount * 0.5;
+}
 
 // j-k 결합에서 k쪽에 붙은 원자 집합(k 포함). j에 도달하면 고리이므로 null.
 export function branchAtoms(mol, j, k) {

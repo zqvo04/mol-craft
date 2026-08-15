@@ -1,4 +1,5 @@
 import { SUPABASE } from './config.js';
+import { createMenuSelect } from './menu-select.js';
 
 const FAVORITES_KEY = 'mol-craft:catalog-favorites';
 const COMPARE_KEY = 'mol-craft:catalog-compare';
@@ -76,7 +77,17 @@ const persistIds = (key, ids) => localStorage.setItem(key, JSON.stringify([...id
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const label = (record) => record.commonName || record.name;
 const mass = (record) => record.molecularWeight ? `${Number(record.molecularWeight).toLocaleString('en-US', { maximumFractionDigits: 3 })} g/mol` : '—';
-const structureUrl = (record, format = 'PNG') => record.pubchemCid ? `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${record.pubchemCid}/${format}?image_size=large` : '';
+export const STRUCTURE_IMAGE_STATES = Object.freeze(['loading', 'ready', 'retrying', 'fallback', 'unavailable']);
+export const structureUrl = (record, format = 'PNG') => record.pubchemCid ? `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${record.pubchemCid}/${format}?image_size=large` : '';
+export const structureFallbackText = (record) => record.molecularFormula || label(record) || '구조식 미제공';
+const structureImageMarkup = (record, { detail = false } = {}) => {
+  const url = structureUrl(record);
+  const name = escapeHtml(label(record));
+  const fallback = escapeHtml(structureFallbackText(record));
+  const className = detail ? 'catalog-structure-image' : 'catalog-card-image';
+  if (!url) return `<span class="structure-image ${className}" data-structure-image data-state="unavailable" role="img" aria-label="${name} 2D 구조식 미제공"><span class="structure-image-fallback">${fallback}</span><small>구조식 미제공</small></span>`;
+  return `<span class="structure-image ${className}" data-structure-image data-state="loading" data-structure-url="${escapeHtml(url)}" data-fallback="${fallback}" data-attempts="0"><span class="structure-image-skeleton" aria-hidden="true"></span><img src="${escapeHtml(url)}" alt="${name} 구조식" loading="lazy"></span>`;
+};
 const sourceHeaders = () => ({ apikey: SUPABASE.key, Authorization: `Bearer ${SUPABASE.key}` });
 
 async function loadCatalogData() {
@@ -127,6 +138,39 @@ export function initCatalog() {
   let loaded = false;
   let page = 1;
   const pageSize = 24;
+  createMenuSelect(category);
+  createMenuSelect(sort);
+
+  const setImageFallback = (host) => {
+    host.dataset.state = 'fallback';
+    host.innerHTML = `<span class="structure-image-fallback">${escapeHtml(host.dataset.fallback ?? '구조식')}</span><small>분자식으로 표시</small>`;
+  };
+  const bindStructureImageStates = (host) => {
+    host.addEventListener('load', (event) => {
+      const image = event.target;
+      if (!(image instanceof HTMLImageElement)) return;
+      const frame = image.closest('[data-structure-image]');
+      if (frame) frame.dataset.state = 'ready';
+    }, true);
+    host.addEventListener('error', (event) => {
+      const image = event.target;
+      if (!(image instanceof HTMLImageElement)) return;
+      const frame = image.closest('[data-structure-image]');
+      if (!frame || frame.dataset.state === 'fallback') return;
+      const attempts = Number(frame.dataset.attempts ?? '0');
+      if (attempts < 1 && frame.dataset.structureUrl) {
+        frame.dataset.attempts = String(attempts + 1);
+        frame.dataset.state = 'retrying';
+        const retryUrl = new URL(frame.dataset.structureUrl);
+        retryUrl.searchParams.set('retry', String(Date.now()));
+        image.src = retryUrl.toString();
+        return;
+      }
+      setImageFallback(frame);
+    }, true);
+  };
+  bindStructureImageStates(results);
+  bindStructureImageStates(detail);
 
   const updateCompare = () => {
     compareBadge.textContent = String(compare.size);
@@ -149,7 +193,7 @@ export function initCatalog() {
     count.textContent = `${all.length}개 · ${page}/${totalPages}쪽`;
     results.innerHTML = all.length ? `${list.map((record) => `<article class="catalog-card" data-id="${record.id}">
       <button class="catalog-favourite ${favourites.has(record.id) ? 'saved' : ''}" data-favourite="${record.id}" aria-label="${escapeHtml(label(record))} 즐겨찾기">♥</button>
-      <button class="catalog-card-main" data-detail="${record.id}"><img src="${structureUrl(record)}" alt="${escapeHtml(label(record))} 구조식" loading="lazy"><span class="catalog-category ${record.category}">${CATEGORY_LABEL[record.category] ?? record.category}</span><strong>${escapeHtml(label(record))}</strong><code>${escapeHtml(record.molecularFormula ?? '—')}</code><small>${mass(record)}</small></button>
+      <button class="catalog-card-main" data-detail="${record.id}">${structureImageMarkup(record)}<span class="catalog-category ${record.category}">${CATEGORY_LABEL[record.category] ?? record.category}</span><strong>${escapeHtml(label(record))}</strong><code>${escapeHtml(record.molecularFormula ?? '—')}</code><small>${mass(record)}</small></button>
       <button class="catalog-compare ${compare.has(record.id) ? 'selected' : ''}" data-compare="${record.id}">${compare.has(record.id) ? '비교 선택됨' : '+ 비교'}</button>
     </article>`).join('')}<nav class="catalog-pagination" aria-label="분자 검색 결과 페이지"><button data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}>이전</button><span>${page} / ${totalPages}</span><button data-page="${page + 1}" ${page === totalPages ? 'disabled' : ''}>다음</button></nav>` : '<p class="catalog-empty">검색 조건에 맞는 분자가 없습니다.</p>';
   };
@@ -158,7 +202,7 @@ export function initCatalog() {
     const record = currentResults.find((item) => item.id === selected) ?? currentResults[0];
     if (!record) { selected = null; detail.innerHTML = '<p class="catalog-empty">현재 검색 결과에서 분자를 선택하세요.</p>'; return; }
     selected = record.id;
-    detail.innerHTML = `<div class="catalog-detail-head"><span class="catalog-category ${record.category}">${CATEGORY_LABEL[record.category] ?? record.category}</span><button class="catalog-favourite ${favourites.has(record.id) ? 'saved' : ''}" data-favourite="${record.id}">♥ 저장</button></div><h2>${escapeHtml(label(record))}</h2><p class="catalog-iupac">${escapeHtml(record.name)}</p><img class="catalog-structure" src="${structureUrl(record)}" alt="${escapeHtml(label(record))} 2D 구조식"><div class="catalog-formula">${escapeHtml(record.molecularFormula ?? '—')}</div><dl class="catalog-properties"><div><dt>분자량</dt><dd>${mass(record)}</dd></div><div><dt>CAS</dt><dd>${escapeHtml(record.casNumber ?? '—')}</dd></div><div><dt>XlogP</dt><dd>${escapeHtml(record.xlogp ?? '—')}</dd></div><div><dt>극성 표면적</dt><dd>${record.topologicalPolarSurfaceArea ? `${escapeHtml(record.topologicalPolarSurfaceArea)} Å²` : '—'}</dd></div><div><dt>끓는점</dt><dd>${escapeHtml(record.boilingPoint ?? '—')}</dd></div><div><dt>녹는점</dt><dd>${escapeHtml(record.meltingPoint ?? '—')}</dd></div><div><dt>밀도</dt><dd>${escapeHtml(record.density ?? '—')}</dd></div><div><dt>용해도</dt><dd>${escapeHtml(record.solubility ?? '—')}</dd></div></dl><p class="catalog-smiles-label">Connectivity SMILES</p><code class="catalog-smiles">${escapeHtml(record.canonicalSmiles ?? '—')}</code><div class="catalog-detail-actions"><button data-compare="${record.id}" class="${compare.has(record.id) ? 'selected' : ''}">${compare.has(record.id) ? '비교에서 제거' : '비교에 추가'}</button><button data-load="${record.id}">조립 도구로 불러오기</button></div><a href="${escapeHtml(record.sourceUrl)}" target="_blank" rel="noreferrer">PubChem 원본 레코드 ↗</a>`;
+    detail.innerHTML = `<div class="catalog-detail-head"><span class="catalog-category ${record.category}">${CATEGORY_LABEL[record.category] ?? record.category}</span><button class="catalog-favourite ${favourites.has(record.id) ? 'saved' : ''}" data-favourite="${record.id}">♥ 저장</button></div><h2>${escapeHtml(label(record))}</h2><p class="catalog-iupac">${escapeHtml(record.name)}</p>${structureImageMarkup(record, { detail: true })}<div class="catalog-formula">${escapeHtml(record.molecularFormula ?? '—')}</div><dl class="catalog-properties"><div><dt>분자량</dt><dd>${mass(record)}</dd></div><div><dt>CAS</dt><dd>${escapeHtml(record.casNumber ?? '—')}</dd></div><div><dt>XlogP</dt><dd>${escapeHtml(record.xlogp ?? '—')}</dd></div><div><dt>극성 표면적</dt><dd>${record.topologicalPolarSurfaceArea ? `${escapeHtml(record.topologicalPolarSurfaceArea)} Å²` : '—'}</dd></div><div><dt>끓는점</dt><dd>${escapeHtml(record.boilingPoint ?? '—')}</dd></div><div><dt>녹는점</dt><dd>${escapeHtml(record.meltingPoint ?? '—')}</dd></div><div><dt>밀도</dt><dd>${escapeHtml(record.density ?? '—')}</dd></div><div><dt>용해도</dt><dd>${escapeHtml(record.solubility ?? '—')}</dd></div></dl><p class="catalog-smiles-label">Connectivity SMILES</p><code class="catalog-smiles">${escapeHtml(record.canonicalSmiles ?? '—')}</code><div class="catalog-detail-actions"><button data-compare="${record.id}" class="${compare.has(record.id) ? 'selected' : ''}">${compare.has(record.id) ? '비교에서 제거' : '비교에 추가'}</button><button data-load="${record.id}">조립 도구로 불러오기</button></div><a href="${escapeHtml(record.sourceUrl)}" target="_blank" rel="noreferrer">PubChem 원본 레코드 ↗</a>`;
   };
   const render = () => { renderCards(); renderDetail(); updateCompare(); };
   const load = async () => {

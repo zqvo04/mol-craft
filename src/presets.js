@@ -210,7 +210,27 @@ function aromaticFuran() {
     const idx = atoms.push(['H', add(p, scale(unit(p), 1.08)), 'H_']) - 1;
     bonds.push([k, idx, 1]);
   }
-  return { atoms, bonds, attachType: 'C_R' };
+  return { atoms, bonds, attachType: 'C_R', aromaticLonePairs: [3] };
+}
+
+function aromaticPyrrole() {
+  const size = 5;
+  const radius = 1.40 / (2 * Math.sin(Math.PI / size));
+  const atoms = [];
+  const bonds = [];
+  for (let k = 0; k < size; k++) {
+    const theta = (k * 2 * Math.PI) / size;
+    const isNitrogen = k === 3;
+    atoms.push([isNitrogen ? 'N' : 'C', [radius * Math.cos(theta), radius * Math.sin(theta), 0], isNitrogen ? 'N_R' : 'C_R']);
+  }
+  for (let k = 0; k < size; k++) bonds.push([k, (k + 1) % size, 1.5]);
+  for (let k = 1; k < size; k++) {
+    const p = atoms[k][1];
+    const outward = unit(p);
+    const idx = atoms.push(['H', add(p, scale(outward, 1.08)), 'H_']) - 1;
+    bonds.push([k, idx, 1]);
+  }
+  return { atoms, bonds, attachType: 'C_R', aromaticLonePairs: [3] };
 }
 
 export const RING_TEMPLATES = {
@@ -219,6 +239,7 @@ export const RING_TEMPLATES = {
   cyclopentane: { name: '사이클로펜탄', group: 'ring', detail: '포화 5원 고리', ...saturatedRing(5) },
   pyridine: { name: '피리딘', group: 'heteroring', detail: '질소 포함 방향족 고리', ...aromaticPyridine() },
   furan: { name: '푸란', group: 'heteroring', detail: '산소 포함 방향족 고리', ...aromaticFuran() },
+  pyrrole: { name: '피롤', group: 'heteroring', detail: '비공유쌍 공여 방향족 고리', ...aromaticPyrrole() },
   carbonyl: {
     name: '카보닐', group: 'functional', detail: 'C=O 기능기', attachType: 'C_2',
     atoms: [['C', [0, 0, 0], 'C_2'], ['O', [1.23, 0, 0], 'O_2'], ['H', [-0.48, 0.93, 0], 'H_']],
@@ -241,6 +262,7 @@ export const STRUCTURE_LIBRARY = [
   { key: 'cyclopentane', symbol: '⬠', title: '사이클로펜탄', group: 'ring' },
   { key: 'pyridine', symbol: 'N⌬', title: '피리딘', group: 'heteroring' },
   { key: 'furan', symbol: 'O⬠', title: '푸란', group: 'heteroring' },
+  { key: 'pyrrole', symbol: 'NH⬠', title: '피롤', group: 'heteroring' },
   { key: 'carbonyl', symbol: 'C=O', title: '카보닐', group: 'functional' },
   { key: 'hydroxyl', symbol: '–OH', title: '하이드록실', group: 'functional' },
   { key: 'alkene', symbol: 'C=C', title: '알켄', group: 'functional' },
@@ -290,9 +312,13 @@ export function computeRingPlacement(mol, anchorIdx, template, slotDir, twistDeg
 // 반환값은 새로 추가된 원자 인덱스 배열(template.atoms 순서대로).
 export function insertRingTemplate(mol, anchorIdx, template, slotDir, twistDeg = 0) {
   const placed = computeRingPlacement(mol, anchorIdx, template, slotDir, twistDeg);
-  const idxMap = placed.map(([el, pos, type]) => {
+  const idxMap = placed.map(([el, pos, type], templateIndex) => {
     const idx = addAtom(mol, el, pos);
     if (type) mol.atoms[idx].type = type;
+    if (template.aromaticLonePairs?.includes(templateIndex)) {
+      mol.atoms[idx].aromaticLonePair = true;
+      mol.atoms[idx].aromaticPiContribution = 2;
+    }
     return idx;
   });
   for (const [i, j, order] of template.bonds) addBond(mol, idxMap[i], idxMap[j], order);
