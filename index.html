@@ -2,7 +2,12 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#eef1f8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/mol-craft-icon.svg">
 <title>mol-craft — 무료 분자 조립·응력 분석</title>
 <script>
   // 첫 페인트 전에 저장된 테마를 적용한다 — body 하단 스크립트까지 기다리면
@@ -556,6 +561,93 @@
     #palette { flex-basis: 100%; }
     #disclaimer { max-width: none; text-align: left; margin-left: 0; }
   }
+  /* M1 모바일 셸: 데스크톱의 가로 도구 모음과 사이드바를 축소하지 않고,
+     캔버스 중심 화면 + 하단 조립 시트 + 필요할 때만 열리는 인스펙터로 재배치한다. */
+  #mobile-sheet-toggle, #mobile-inspector-toggle, #mobile-more, #mobile-status,
+  #mobile-view-actions, #mobile-more-sheet { display: none; }
+  @media (max-width: 720px) {
+    html, body { overscroll-behavior: none; }
+    body {
+      display: block; height: 100dvh; min-height: 100dvh; padding: 0;
+      overflow: hidden; background-attachment: scroll;
+    }
+    header, #toolbar, #viewer, aside, #toolhint { box-shadow: var(--shadow-md), var(--glass-highlight); }
+    header {
+      position: fixed; z-index: var(--z-workspace);
+      top: max(8px, env(safe-area-inset-top)); left: 8px; right: 8px;
+      min-height: 54px; padding: 8px 10px; border-radius: 18px;
+      flex-wrap: nowrap; gap: 8px;
+    }
+    header > :not(strong):not(#theme-toggle):not(#mobile-more):not(#mobile-status) { display: none; }
+    header strong { min-width: 0; margin-right: 0; font-size: 15px; white-space: nowrap; }
+    #mobile-status { display: inline-flex; min-width: 0; flex: 1; color: var(--muted-fg); font: 600 10px/1.2 var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #mobile-more { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; font-size: 18px; }
+    #theme-toggle { width: 44px; height: 44px; }
+    #viewer {
+      position: fixed; z-index: var(--z-canvas);
+      top: calc(max(8px, env(safe-area-inset-top)) + 64px);
+      right: 8px; bottom: calc(66px + env(safe-area-inset-bottom)); left: 8px;
+      min-height: 0; border-radius: 20px; touch-action: none;
+      transition: bottom .18s var(--ease-out);
+    }
+    body[data-mobile-sheet="expanded"] #viewer { bottom: min(50dvh, 390px); }
+    #toolhint { display: none; }
+    #toolbar {
+      position: fixed; z-index: var(--z-panel);
+      right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px;
+      max-height: min(52dvh, 420px); padding: 6px; overflow: auto;
+      border-radius: 22px 22px 18px 18px; display: flex; gap: 7px;
+      transform: translateY(0); transition: transform .18s var(--ease-out);
+      -webkit-overflow-scrolling: touch;
+    }
+    #mobile-sheet-toggle {
+      display: flex; align-items: center; justify-content: space-between; flex: 1 0 100%;
+      min-height: 48px; padding: 8px 14px; color: var(--fg); font-weight: 650;
+      background: color-mix(in srgb, var(--primary) 11%, var(--surface));
+    }
+    #mobile-sheet-toggle::after { content: '⌃'; color: var(--primary); font-size: 17px; transition: transform .18s var(--ease-out); }
+    body[data-mobile-sheet="collapsed"] #toolbar > :not(#mobile-sheet-toggle) { display: none; }
+    body[data-mobile-sheet="collapsed"] #mobile-sheet-toggle::after { transform: rotate(180deg); }
+    #tools { flex: 1 0 100%; gap: 5px; padding: 3px; }
+    #tools button { min-height: 44px; }
+    #build-console, #selection-context { flex: 1 0 100%; gap: 6px; padding: 7px; }
+    #recent-palette { flex-wrap: nowrap; width: 100%; }
+    #recent-palette button { flex: 1 1 0; min-height: 44px; }
+    #element-more, #structure-library-toggle, #fill-h, #view2d, #rotate-structure { min-height: 44px; }
+    #history-controls { flex: 1 0 auto; margin-left: auto; }
+    #history-controls button { min-width: 44px; min-height: 44px; }
+    #palette { width: 100%; }
+    #palette button { min-width: 44px; min-height: 44px; }
+    #selection-context button, #charge-controls button { min-height: 44px; }
+    #mobile-view-actions { display: block; position: absolute; z-index: 6; top: 12px; right: 12px; }
+    #mobile-inspector-toggle { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; padding: 7px 10px; font-size: 11px; font-weight: 650; }
+    aside {
+      position: fixed; z-index: var(--z-modal); top: auto; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px;
+      max-height: min(74dvh, 640px); padding: 8px 16px 20px; border-radius: 24px 24px 18px 18px;
+      transform: translateY(calc(100% + 16px)); opacity: 0; pointer-events: none;
+      transition: transform .22s var(--ease-out), opacity .16s var(--ease-out);
+    }
+    body[data-mobile-inspector="open"] aside { transform: translateY(0); opacity: 1; pointer-events: auto; }
+    aside::before { content: ''; display: block; width: 38px; height: 4px; margin: 2px auto 10px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 22%, transparent); }
+    .inspector-tabs { top: -8px; margin-inline: -16px; padding-inline: 16px; }
+    #mobile-more-sheet {
+      position: fixed; z-index: var(--z-modal); right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px;
+      padding: 14px; border: 1px solid var(--glass-border); border-radius: 24px 24px 18px 18px;
+      display: block;
+      background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+      box-shadow: var(--shadow-md), var(--glass-highlight);
+    }
+    #mobile-more-sheet[hidden] { display: none; }
+    .mobile-sheet-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .mobile-sheet-heading strong { font-size: 14px; }.mobile-sheet-heading p { margin: 2px 0 0; color: var(--muted-fg); font-size: 11px; }
+    .mobile-more-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+    .mobile-more-grid button { min-height: 48px; border-radius: 14px; text-align: left; }
+    #toast { bottom: 12px; max-width: calc(100% - 24px); font-size: 12px; }
+    body[data-mobile-sheet="expanded"] #toast { bottom: min(50dvh, 390px); }
+    #stability { top: 10px; left: 10px; max-width: calc(100% - 94px); }
+    #legend { left: 10px; bottom: 10px; }
+    .slot-button, .anchor-candidate { min-width: 44px; min-height: 44px; }
+  }
   .warnglow {
     position: absolute;
     width: 58px; height: 58px;
@@ -570,8 +662,9 @@
 </style>
 </head>
 <body>
-<header>
+<header id="app-header">
   <strong>mol-craft</strong>
+  <span id="mobile-status" role="status" aria-live="polite">온라인 · 이 기기에 저장됨</span>
   <select id="preset"></select>
   <select id="colorby" title="원자 색을 무엇으로 칠할지">
     <option value="element">원소 색</option>
@@ -585,12 +678,14 @@
   <button id="share-short">단축 링크</button>
   <button id="catalog-open" class="catalog-open">분자 카탈로그 <span id="catalog-compare-count">0</span></button>
   <span id="disclaimer">UFF 역장 · 진공 · 정전기 에너지항 제외 · 정성 비교용(양자계산 대체 아님)</span>
+  <button id="mobile-more" type="button" aria-label="추가 도구 열기" aria-haspopup="dialog" aria-controls="mobile-more-sheet" aria-expanded="false">⋯</button>
   <button id="theme-toggle" title="다크모드 전환" aria-pressed="false">
     <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
     <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a6.8 6.8 0 0 0 10.2 10.2z"/></svg>
   </button>
 </header>
 <div id="toolbar">
+  <button id="mobile-sheet-toggle" type="button" aria-expanded="false" aria-controls="build-console">조립 콘솔</button>
   <div id="tools" role="group" aria-label="작업 상태">
     <button id="tool-view" class="tool active" data-tool="view" title="탐색: 분자를 회전·확대해 관찰합니다">탐색</button>
     <button id="tool-build" class="tool" data-tool="place" title="조립: 선택한 원소나 구조 단위를 붙입니다">조립</button>
@@ -629,6 +724,7 @@
 </div>
 <div id="toolhint"></div>
 <div id="viewer">
+  <div id="mobile-view-actions"><button id="mobile-inspector-toggle" type="button" aria-expanded="false" aria-controls="analysis-panel">분석 · 학습</button></div>
   <div id="toast" role="status" aria-live="polite"><span id="toast-text"></span><button id="toast-action" type="button"></button></div>
   <div id="stability"></div>
   <div id="boxselect"></div>
@@ -674,6 +770,17 @@
     <section class="model-limit"><h2>계산 모델의 경계</h2><p>표시는 UFF 기반의 기하·상대 에너지·비결합 접촉을 학습용으로 해석합니다. 용매 효과, 전자 비편재화, 반응 경로, 수율과 정량 활성화 장벽은 직접 예측하지 않습니다.</p></section>
   </div>
 </aside>
+<section id="mobile-more-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-more-title" hidden>
+  <div class="mobile-sheet-heading"><div><strong id="mobile-more-title">추가 도구</strong><p>현재 구조에 적용할 작업을 고르세요.</p></div><button id="mobile-more-close" type="button" aria-label="추가 도구 닫기">닫기</button></div>
+  <div class="mobile-more-grid">
+    <button data-mobile-action="catalog" type="button">분자 카탈로그</button>
+    <button data-mobile-action="minimize" type="button">구조 최적화</button>
+    <button data-mobile-action="learning" type="button">학습 노트</button>
+    <button data-mobile-action="analysis" type="button">상세 분석</button>
+    <button data-mobile-action="share" type="button">링크 복사</button>
+    <button data-mobile-action="export-mol" type="button">MOL 내보내기</button>
+  </div>
+</section>
 <dialog id="catalog-dialog" aria-labelledby="catalog-title">
   <div class="catalog-shell">
     <header class="catalog-header"><div><span class="catalog-eyebrow">MOLECULAR DATABASE</span><h1 id="catalog-title">분자 카탈로그</h1><p id="catalog-status">카탈로그를 열어 검색을 시작하세요.</p></div><button id="catalog-close" aria-label="카탈로그 닫기">닫기</button></header>

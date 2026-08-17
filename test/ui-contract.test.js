@@ -45,12 +45,21 @@ test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 
   assert.match(html, /id="redo"/);
   assert.match(html, /id="slot-ring"/);
   assert.match(html, /id="anchor-candidates"/);
+  assert.match(html, /id="mobile-sheet-toggle"/);
+  assert.match(html, /id="mobile-inspector-toggle"/);
+  assert.match(html, /id="mobile-more-sheet"/);
+  assert.match(html, /safe-area-inset-bottom/);
+  assert.match(html, /viewport-fit=cover/);
   assert.match(app, /function redo\(\)/);
   assert.match(app, /function startFragment2D\(\)/);
   assert.match(app, /function directionFromSketchDrag\(/);
   assert.match(app, /function openSlotRing\(/);
   assert.match(app, /function openAnchorCandidates\(/);
   assert.match(app, /Ctrl\+Shift\+Z/);
+  assert.match(app, /function setMobileSheet/);
+  assert.match(app, /function setMobileInspector/);
+  assert.match(app, /function openSelectionCandidates/);
+  assert.match(app, /navigator\.serviceWorker\.register\('\.\/service-worker\.js'\)/);
 });
 
 test('접근성·감소된 모션 스타일 계약이 유지된다', async () => {
@@ -62,6 +71,7 @@ test('접근성·감소된 모션 스타일 계약이 유지된다', async () =>
   assert.match(html, /canvas-halo/);
   assert.match(html, /role="status" aria-live="polite"/);
   assert.match(html, /aria-label="가능한 결합 자리"/);
+  assert.match(html, /min-width: 44px; min-height: 44px/);
 });
 
 test('P5 조립·선택·슬롯 편집은 스크린리더와 키보드 대체 경로를 제공한다', async () => {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Mol-Craft">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a84ff"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
+  <rect width="512" height="512" rx="116" fill="url(#g)"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="28" opacity=".92"><path d="M157 292 254 166l104 126-101 62z"/><path d="m157 292 97 62 104-62"/></g>
+  <circle cx="157" cy="292" r="48" fill="#fff"/><circle cx="254" cy="166" r="48" fill="#c4b5fd"/><circle cx="358" cy="292" r="48" fill="#99f6e4"/><circle cx="254" cy="354" r="48" fill="#fff"/>
+</svg>

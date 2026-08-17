@@ -70,6 +70,8 @@ try {
   await send('Page.bringToFront');
 
   const mobileFlow = await evaluate(`(() => {
+    document.getElementById('mobile-sheet-toggle').click();
+    const sheetExpanded = document.body.dataset.mobileSheet === 'expanded';
     document.getElementById('structure-library-toggle').click();
     const libraryOpen = !document.getElementById('structure-library').hidden;
     document.querySelector('[data-template="benzene"]').click();
@@ -78,9 +80,9 @@ try {
     const learningVisible = !document.getElementById('learning-panel').hidden;
     document.getElementById('catalog-open').click();
     const catalogOpen = document.getElementById('catalog-dialog').open;
-    return { libraryOpen, ringMode, learningVisible, catalogOpen };
+    return { sheetExpanded, libraryOpen, ringMode, learningVisible, catalogOpen };
   })()`);
-  assert.deepEqual(mobileFlow, { libraryOpen: true, ringMode: true, learningVisible: true, catalogOpen: true });
+  assert.deepEqual(mobileFlow, { sheetExpanded: true, libraryOpen: true, ringMode: true, learningVisible: true, catalogOpen: true });
   await waitForCondition(`document.querySelectorAll('#catalog-results .catalog-card').length > 0`, 'molecule catalog records');
   const screenshot = await send('Page.captureScreenshot', { format: 'png' });
   await writeFile('/tmp/mol-craft-mobile-catalog.png', Buffer.from(screenshot.data, 'base64'));
@@ -89,6 +91,7 @@ try {
   await send('Page.navigate', { url: pageUrl });
   await waitForApp();
   await send('Page.bringToFront');
+  await evaluate(`document.getElementById('mobile-sheet-toggle').click()`);
   await evaluate(`document.getElementById('structure-library-toggle').focus()`);
   await pressEnter();
   assert.equal(await evaluate(`!document.getElementById('structure-library').hidden`), true);
@@ -99,11 +102,14 @@ try {
   await pressEnter();
   assert.equal(await evaluate(`!document.getElementById('learning-panel').hidden`), true);
 
-  await evaluate(`document.getElementById('catalog-open').focus()`);
+  await evaluate(`document.getElementById('mobile-more').focus()`);
   await pressEnter();
+  assert.equal(await evaluate(`!document.getElementById('mobile-more-sheet').hidden`), true);
+  await evaluate(`document.querySelector('[data-mobile-action="catalog"]').focus()`);
+  assert.equal(await evaluate(`document.activeElement?.dataset.mobileAction`), 'catalog');
+  await evaluate(`document.querySelector('[data-mobile-action="catalog"]').click()`);
   assert.equal(await evaluate(`document.getElementById('catalog-dialog').open`), true);
-  await evaluate(`document.getElementById('catalog-close').focus()`);
-  await pressEnter();
+  await evaluate(`document.getElementById('catalog-close').click()`);
   assert.equal(await evaluate(`!document.getElementById('catalog-dialog').open`), true);
 
   console.log(JSON.stringify({ mobileFlow, keyboardFlow: 'passed', reducedMotion: 'emulated' }));

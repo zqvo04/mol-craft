@@ -1,0 +1,19 @@
+{
+  "name": "Mol-Craft — 분자 조립 학습",
+  "short_name": "Mol-Craft",
+  "description": "유기화학 구조를 조립하고 2D·3D 관찰과 학습 노트로 확인하는 교육용 분자 실험 환경입니다.",
+  "lang": "ko",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#eef1f8",
+  "theme_color": "#eef1f8",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icons/mol-craft-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

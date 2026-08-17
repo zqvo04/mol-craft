@@ -322,9 +322,110 @@ function setInspectorTab(tab) {
   $('learning-panel').hidden = tab !== 'learning';
 }
 
+const MOBILE_QUERY = window.matchMedia?.('(max-width: 720px)');
+let mobileMoreOpen = false;
+let deferredInstallPrompt = null;
+
+function isMobileShell() {
+  return Boolean(MOBILE_QUERY?.matches);
+}
+
+function setMobileSheet(mode = 'collapsed') {
+  if (!isMobileShell()) return;
+  const expanded = mode === 'expanded';
+  document.body.dataset.mobileSheet = expanded ? 'expanded' : 'collapsed';
+  $('mobile-sheet-toggle')?.setAttribute('aria-expanded', String(expanded));
+}
+
+function setMobileMore(open) {
+  mobileMoreOpen = Boolean(open);
+  const sheet = $('mobile-more-sheet');
+  if (!sheet) return;
+  sheet.hidden = !mobileMoreOpen;
+  $('mobile-more')?.setAttribute('aria-expanded', String(mobileMoreOpen));
+}
+
+function setMobileInspector(open, tab = null) {
+  if (tab) setInspectorTab(tab);
+  if (!isMobileShell()) return;
+  document.body.dataset.mobileInspector = open ? 'open' : 'closed';
+  $('mobile-inspector-toggle')?.setAttribute('aria-expanded', String(open));
+  if (open) setMobileMore(false);
+}
+
+function updateMobileStatus() {
+  const status = $('mobile-status');
+  if (!status) return;
+  const offline = !navigator.onLine;
+  status.textContent = offline
+    ? '오프라인 · 이 기기에 저장됨'
+    : deferredInstallPrompt ? '온라인 · 설치 가능' : '온라인 · 이 기기에 저장됨';
+  status.dataset.state = offline ? 'offline' : 'online';
+}
+
+function syncMobileShell() {
+  if (!isMobileShell()) {
+    delete document.body.dataset.mobileSheet;
+    delete document.body.dataset.mobileInspector;
+    setMobileMore(false);
+    return;
+  }
+  setMobileSheet(document.body.dataset.mobileSheet || 'collapsed');
+  document.body.dataset.mobileInspector ||= 'closed';
+  updateMobileStatus();
+}
+
 document.querySelector('[data-inspector-tabs]').addEventListener('click', (ev) => {
   const button = ev.target.closest('[data-inspector-tab]');
   if (button) setInspectorTab(button.dataset.inspectorTab);
+});
+
+$('mobile-sheet-toggle')?.addEventListener('click', () => {
+  const expanded = document.body.dataset.mobileSheet !== 'expanded';
+  setMobileSheet(expanded ? 'expanded' : 'collapsed');
+});
+$('mobile-inspector-toggle')?.addEventListener('click', () => {
+  setMobileInspector(document.body.dataset.mobileInspector !== 'open');
+});
+$('mobile-more')?.addEventListener('click', () => setMobileMore(!mobileMoreOpen));
+$('mobile-more-close')?.addEventListener('click', () => setMobileMore(false));
+$('mobile-more-sheet')?.addEventListener('click', async (event) => {
+  const action = event.target.closest('[data-mobile-action]')?.dataset.mobileAction;
+  if (!action) return;
+  setMobileMore(false);
+  if (action === 'catalog') $('catalog-open').click();
+  if (action === 'minimize') $('minimize').click();
+  if (action === 'learning') setMobileInspector(true, 'learning');
+  if (action === 'analysis') setMobileInspector(true, 'analysis');
+  if (action === 'share') {
+    const url = `${location.origin}${location.pathname}#s=${await encodeStateAsync(state.mol)}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Mol-Craft 구조', url }); toast('공유 창을 열었습니다'); }
+      catch { /* 공유 취소는 오류가 아니다. */ }
+    } else $('share').click();
+  }
+  if (action === 'export-mol') $('export-mol').click();
+});
+$('mobile-more-sheet')?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  const actionButton = event.target.closest('[data-mobile-action]');
+  if (!actionButton) return;
+  event.preventDefault();
+  actionButton.click();
+});
+
+MOBILE_QUERY?.addEventListener('change', syncMobileShell);
+window.addEventListener('online', updateMobileStatus);
+window.addEventListener('offline', updateMobileStatus);
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateMobileStatus();
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  updateMobileStatus();
+  toast('Mol-Craft가 기기에 설치되었습니다');
 });
 
 function updateLearningPanel() {
@@ -676,6 +777,7 @@ function useElement(el) {
   setTool('place');
   renderMaterialControls();
   toast(`${el} 원자 조립 준비`);
+  setMobileSheet('expanded');
 }
 
 // 오디오 파일 없이 짧은 클릭음. AudioContext는 하나만 만들어 재사용한다(자동재생 정책 대응).
@@ -1093,6 +1195,8 @@ let blinkOn = true;
 let suppressViewerClick = false;
 let anchorPressTimer = null;
 let touchSlotOpened = false;
+let anchorPressPoint = null;
+let lastViewerPointerType = 'mouse';
 setInterval(() => { blinkOn = !blinkOn; if (state.ghost) drawGhost(); }, 400);
 
 // 초록: 정상. 주황: 붙지만 초원자가 경고. 빨강: 못 붙음(원자가 포화 등).
@@ -1264,6 +1368,23 @@ function openAnchorCandidates(hits, px, py) {
   candidates.hidden = false;
 }
 
+function openSelectionCandidates(hits, px, py) {
+  const candidates = $('anchor-candidates');
+  const rect = viewerEl.getBoundingClientRect();
+  candidates.innerHTML = hits.slice(0, 4).map(({ index }) => `<button class="anchor-candidate" data-selection-candidate="${index}" aria-label="${state.mol.atoms[index].el}${index} 선택">${state.mol.atoms[index].el}${index}</button>`).join('');
+  candidates.querySelectorAll('[data-selection-candidate]').forEach((button, offset) => {
+    button.style.left = `${px - rect.left - window.scrollX + offset * 44}px`;
+    button.style.top = `${py - rect.top - window.scrollY - 48}px`;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAnchorCandidates();
+      handleAtomClick(Number(button.dataset.selectionCandidate), false);
+    });
+  });
+  candidates.hidden = false;
+}
+
 viewerEl.addEventListener('pointermove', (ev) => {
   if (state.tool !== 'place') return;
   const anchor = pickAtom(ev.pageX, ev.pageY, 40);
@@ -1276,10 +1397,12 @@ viewerEl.addEventListener('pointermove', (ev) => {
 });
 viewerEl.addEventListener('pointerleave', () => { clearGhost(); closeAnchorCandidates(); });
 viewerEl.addEventListener('pointerdown', (ev) => {
+  lastViewerPointerType = ev.pointerType || 'mouse';
   if (state.tool !== 'place' || ev.pointerType !== 'touch') return;
   const hits = pickAtomCandidates(ev.pageX, ev.pageY, 46);
   if (!hits.length) return;
   touchSlotOpened = false;
+  anchorPressPoint = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
   clearTimeout(anchorPressTimer);
   anchorPressTimer = window.setTimeout(() => {
     touchSlotOpened = true;
@@ -1290,6 +1413,7 @@ viewerEl.addEventListener('pointerdown', (ev) => {
 });
 viewerEl.addEventListener('pointerup', (ev) => {
   clearTimeout(anchorPressTimer);
+  anchorPressPoint = null;
   if (ev.target.closest('.slot-button, .anchor-candidate')) return;
   if (state.tool !== 'place' || ev.pointerType !== 'touch' || touchSlotOpened) return;
   const hits = pickAtomCandidates(ev.pageX, ev.pageY, 46);
@@ -1298,7 +1422,22 @@ viewerEl.addEventListener('pointerup', (ev) => {
   if (hits.length > 1) openAnchorCandidates(hits, ev.pageX, ev.pageY);
   else openSlotRing(hits[0].index);
 });
-viewerEl.addEventListener('pointercancel', () => clearTimeout(anchorPressTimer));
+viewerEl.addEventListener('pointermove', (ev) => {
+  if (!anchorPressPoint || ev.pointerId !== anchorPressPoint.pointerId) return;
+  if (Math.hypot(ev.clientX - anchorPressPoint.x, ev.clientY - anchorPressPoint.y) > 10) {
+    clearTimeout(anchorPressTimer);
+    anchorPressPoint = null;
+  }
+});
+viewerEl.addEventListener('pointercancel', () => { clearTimeout(anchorPressTimer); anchorPressPoint = null; });
+viewerEl.addEventListener('pointerup', (ev) => {
+  if (state.tool !== 'select' || ev.pointerType !== 'touch') return;
+  const hits = pickAtomCandidates(ev.pageX, ev.pageY, 46);
+  if (!hits.length) return;
+  suppressViewerClick = true;
+  if (hits.length > 1) openSelectionCandidates(hits, ev.pageX, ev.pageY);
+  else handleAtomClick(hits[0].index, false);
+});
 
 // ---- 고리 도구 고스트 미리보기 --------------------------------------------
 // place 도구의 previewAttach/drawGhost/clearGhost와 같은 패턴: computeRingPlacement로
@@ -1897,3 +2036,15 @@ async function restoreOnLoad() {
   render();
 }
 restoreOnLoad();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {
+      // PWA 지원 실패는 편집·학습 기능을 막지 않는다. 상태 표시만 온라인으로 유지한다.
+    });
+    syncMobileShell();
+    updateMobileStatus();
+  });
+} else {
+  window.addEventListener('load', syncMobileShell);
+}
