@@ -31,10 +31,15 @@ const state = {
   azimuth: 0,  // 앵커에 이웃이 하나뿐일 때(자리가 사실상 하나) R 키/휠로 돌리는 방위각(도).
                // 자리가 여러 개면 대신 slot을 순환한다 — 두 조작은 서로 배타적이다.
   pendingBond: null, // 'bond' 도구에서 첫 번째로 찍은 원자 인덱스(대기 중인 앵커) — 고리 닫기용
+  selectedBond: null, // { i, j } — 선택 컨텍스트 바에서 편집 중인 기존 결합
   ringTemplate: 'benzene', // 내부 삽입 도구가 사용할 구조 단위 — RING_TEMPLATES의 키
   ringTwist: 0, // 구조 단위의 앵커 결합축 회전 각도. R 키로 30°씩 회전한다.
   ringGhost: null, // { anchor, placed, ok } — 구조 단위 고스트 미리보기
   undoStack: [],
+  redoStack: [],
+  undoLabels: [],
+  redoLabels: [],
+  recentElements: ['C', 'O', 'N', 'H'],
   isomerReference: null,
 };
 
@@ -60,20 +65,49 @@ function restoreLocal() {
 // 파괴적 조작(붙이기/삭제/복제) 직전에만 스냅샷을 남긴다. 구조 전체를 문자열로
 // 찍어 쌓는 방식이라 별도 명령 스택이 필요 없다 — io.encodeState가 이미 갖고 있다.
 const UNDO_LIMIT = 20;
-function pushUndo() {
+function pushUndo(label = '편집') {
   state.undoStack.push(encodeState(state.mol));
+  state.undoLabels.push(label);
   if (state.undoStack.length > UNDO_LIMIT) state.undoStack.shift();
+  if (state.undoLabels.length > UNDO_LIMIT) state.undoLabels.shift();
+  state.redoStack = [];
+  state.redoLabels = [];
+  updateHistoryControls();
+}
+
+function restoreSnapshot(snap) {
+  try { state.mol = decodeState(snap); }
+  catch { toast('복원 실패', 'err'); return false; }
+  state.selection = [];
+  state.snapState = {};
+  state.pendingBond = null;
+  state.ghost = null;
+  state.ringGhost = null;
+  checkSnaps();
+  render();
+  return true;
 }
 
 function undo() {
   const snap = state.undoStack.pop();
   if (!snap) { toast('되돌릴 것이 없습니다', 'err'); return; }
-  try { state.mol = decodeState(snap); }
-  catch { toast('복원 실패', 'err'); return; }
-  state.selection = [];
-  state.snapState = {};
-  checkSnaps();
-  render();
+  const label = state.undoLabels.pop() ?? '편집';
+  state.redoStack.push(encodeState(state.mol));
+  state.redoLabels.push(label);
+  if (!restoreSnapshot(snap)) return;
+  updateHistoryControls();
+  toast(`${label} 되돌림`, 'ok', { actionLabel: '재실행', action: redo });
+}
+
+function redo() {
+  const snap = state.redoStack.pop();
+  if (!snap) { toast('재실행할 것이 없습니다', 'err'); return; }
+  const label = state.redoLabels.pop() ?? '편집';
+  state.undoStack.push(encodeState(state.mol));
+  state.undoLabels.push(label);
+  if (!restoreSnapshot(snap)) return;
+  updateHistoryControls();
+  toast(`${label} 다시 적용`, 'ok', { actionLabel: '되돌리기', action: undo });
 }
 
 const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
@@ -110,17 +144,21 @@ document.addEventListener('wheel', (ev) => {
 }, { capture: true, passive: false });
 
 // atom.serial과 동일한 규칙(XYZ 모델 0-based 배열 인덱스)으로 페이지 좌표(pageX/Y)에
-// 가장 가까운 원자를 찾는다. modelToScreen이 canvasOffset(rect+scroll)을 더해 반환하므로
+// 가까운 원자 후보를 찾는다. modelToScreen이 canvasOffset(rect+scroll)을 더해 반환하므로
 // clientX/Y가 아니라 pageX/Y와 비교해야 스크롤된 페이지에서도 어긋나지 않는다.
-function pickAtom(px, py, thresholdPx = 24) {
-  let best = -1, bestD = thresholdPx;
+function pickAtomCandidates(px, py, thresholdPx = 24) {
+  const hits = [];
   for (let i = 0; i < state.mol.atoms.length; i++) {
     const p = state.mol.atoms[i].pos;
     const s = viewer.modelToScreen({ x: p[0], y: p[1], z: p[2] });
     const d = Math.hypot(s.x - px, s.y - py);
-    if (d < bestD) { bestD = d; best = i; }
+    if (d < thresholdPx) hits.push({ index: i, distance: d });
   }
-  return best;
+  return hits.sort((a, b) => a.distance - b.distance);
+}
+
+function pickAtom(px, py, thresholdPx = 24) {
+  return pickAtomCandidates(px, py, thresholdPx)[0]?.index ?? -1;
 }
 
 // 결합 중점을 화면에 투영해 가장 가까운 결합을 찾는다(pickAtom과 같은 좌표 규칙).
@@ -230,13 +268,13 @@ function render() {
   // 골격식(2D) 보기가 켜져 있으면 3D 뷰어 위에 SVG를 계속 최신 상태로 덮어 그린다.
   // 3Dmol 스타일을 흉내내는 대신 sketch2d.renderSVG(진짜 골격식 규칙)를 그대로 쓴다.
   if (state.flat) {
-    const bondPreview = state.tool === 'bond' && state.pendingBond !== null
-      ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
-      : null;
-    $('sketch2d').innerHTML = renderSVG(state.mol, { bondPreview, selection: state.selection });
+    $('sketch2d').innerHTML = renderSVG(state.mol, { selection: state.selection });
   }
   syncWarnGlows();
   updateToolHint();
+  updateSelectionContext();
+  updateHistoryControls();
+  renderMaterialControls();
   saveLocal();
 }
 
@@ -407,7 +445,7 @@ document.addEventListener('click', (event) => {
 function changeSelectedCharge(nextCharge) {
   if (state.selection.length !== 1) { toast('전하를 바꿀 원자 하나를 선택하세요', 'err'); return; }
   if (!Number.isInteger(nextCharge) || nextCharge < -2 || nextCharge > 2) { toast('교육용 전하 범위는 −2부터 +2입니다', 'err'); return; }
-  pushUndo();
+  pushUndo('형식전하 변경');
   const atom = state.mol.atoms[state.selection[0]];
   atom.charge = nextCharge;
   toast(`${atom.el}${state.selection[0]} 형식전하 ${nextCharge > 0 ? '+' : ''}${nextCharge}`);
@@ -536,18 +574,108 @@ $('torsion-scan').onclick = () => {
 function toggleSelect(i) {
   const idx = state.selection.indexOf(i);
   if (idx === -1) state.selection.push(i); else state.selection.splice(idx, 1);
+  state.selectedBond = null;
   render();
 }
 
 // 하단 알약형 알림.
 let toastTimer;
-function toast(msg, kind = 'ok') {
+let toastAction = null;
+function toast(msg, kind = 'ok', { actionLabel = '', action = null } = {}) {
   const el = $('toast');
-  el.textContent = msg;
+  $('toast-text').textContent = msg;
+  const actionButton = $('toast-action');
+  actionButton.textContent = actionLabel;
+  toastAction = action;
+  el.classList.toggle('has-action', Boolean(actionLabel && action));
   el.style.background = kind === 'ok' ? 'var(--success)' : 'var(--accent)';
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+  toastTimer = setTimeout(() => { el.classList.remove('show'); toastAction = null; }, 2600);
+}
+
+function bondFor(a, b) {
+  return state.mol.bonds.find((bond) => (bond.i === a && bond.j === b) || (bond.i === b && bond.j === a)) ?? null;
+}
+
+function selectBond(bond) {
+  state.selectedBond = { i: bond.i, j: bond.j };
+  state.selection = [bond.i, bond.j];
+  render();
+  signalViewer('select');
+}
+
+function updateHistoryControls() {
+  const undoButton = $('undo');
+  const redoButton = $('redo');
+  if (!undoButton || !redoButton) return;
+  undoButton.disabled = state.undoStack.length === 0;
+  redoButton.disabled = state.redoStack.length === 0;
+  undoButton.setAttribute('aria-label', state.undoStack.length ? `${state.undoLabels.at(-1) ?? '편집'} 실행취소` : '되돌릴 것이 없습니다');
+  redoButton.setAttribute('aria-label', state.redoStack.length ? `${state.redoLabels.at(-1) ?? '편집'} 재실행` : '재실행할 것이 없습니다');
+}
+
+function updateSelectionContext() {
+  const context = $('selection-context');
+  const summary = $('selection-summary');
+  if (!context || !summary) return;
+  const selectedBond = state.selectedBond && bondFor(state.selectedBond.i, state.selectedBond.j);
+  const selected = state.selection;
+  context.hidden = !selected.length && !selectedBond;
+  if (!selected.length && !selectedBond) return;
+  const chargeControls = $('charge-controls');
+  const bondButton = $('selection-bond');
+  const cycleButton = $('selection-bond-cycle');
+  chargeControls.hidden = selected.length !== 1 || Boolean(selectedBond);
+  bondButton.hidden = true;
+  cycleButton.hidden = true;
+  if (selectedBond) {
+    summary.textContent = `${state.mol.atoms[selectedBond.i].el}${selectedBond.i}—${state.mol.atoms[selectedBond.j].el}${selectedBond.j} · ${selectedBond.order === 1.5 ? '방향족' : `${selectedBond.order}중 결합`}`;
+    cycleButton.hidden = false;
+    cycleButton.textContent = '차수 바꾸기';
+  } else if (selected.length === 1) {
+    const atom = state.mol.atoms[selected[0]];
+    const charge = atomCharge(atom);
+    summary.textContent = `${atom.el}${selected[0]}${charge ? ` · ${charge > 0 ? '+' : ''}${charge}` : ''} 선택`;
+  } else if (selected.length === 2) {
+    const existing = bondFor(selected[0], selected[1]);
+    summary.textContent = `${state.mol.atoms[selected[0]].el}${selected[0]} · ${state.mol.atoms[selected[1]].el}${selected[1]}`;
+    if (existing) {
+      cycleButton.hidden = false;
+      cycleButton.textContent = `차수 ${existing.order === 1.5 ? '방향족' : existing.order} 바꾸기`;
+    } else {
+      const allowed = canBond(state.mol, selected[0], selected[1]);
+      bondButton.hidden = false;
+      bondButton.disabled = !allowed.ok || !bondDistanceOk(state.mol, selected[0], selected[1]);
+      bondButton.textContent = bondButton.disabled ? (REASON_MSG[allowed.reason] ?? '결합 불가') : '결합 만들기';
+    }
+  } else {
+    summary.textContent = `${selected.length}개 선택`;
+  }
+  $('duplicate').hidden = selected.length === 0;
+  $('selection-delete').hidden = selected.length === 0;
+}
+
+function renderMaterialControls() {
+  const chip = $('material-chip');
+  const recent = $('recent-palette');
+  if (!chip || !recent) return;
+  const unit = state.tool === 'ring' ? RING_TEMPLATES[state.ringTemplate]?.name ?? '구조 단위' : `${state.element} 원자`;
+  chip.textContent = unit;
+  $('rotate-structure').hidden = state.tool !== 'ring';
+  recent.innerHTML = state.recentElements.slice(0, 4).map((el) => `<button data-recent-el="${el}" aria-label="${el} 원자 선택">${el}</button>`).join('');
+  recent.querySelectorAll('[data-recent-el]').forEach((button) => {
+    button.classList.toggle('active', state.tool === 'place' && button.dataset.recentEl === state.element);
+  });
+}
+
+function useElement(el) {
+  state.element = el;
+  state.slot = 0;
+  state.recentElements = [el, ...state.recentElements.filter((item) => item !== el)].slice(0, 4);
+  setTool('place');
+  renderMaterialControls();
+  toast(`${el} 원자 조립 준비`);
 }
 
 // 오디오 파일 없이 짧은 클릭음. AudioContext는 하나만 만들어 재사용한다(자동재생 정책 대응).
@@ -790,8 +918,11 @@ function setTool(tool) {
   state.tool = tool;
   clearGhost();
   clearRingGhost();
+  closeSlotRing();
+  closeAnchorCandidates();
   ghost2d = null;
   state.pendingBond = null;
+  state.selectedBond = null;
   bondHover2d = null;
   document.querySelectorAll('#tools button').forEach((b) => {
     const matches = b.dataset.tool === tool && (!b.dataset.ring || b.dataset.ring === state.ringTemplate);
@@ -801,32 +932,28 @@ function setTool(tool) {
   document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('element-picked', tool === 'place' && b.dataset.el === state.element));
   document.querySelectorAll('#structure-library [data-template]').forEach((b) => b.classList.toggle('active', tool === 'ring' && b.dataset.template === state.ringTemplate));
   $('structure-library-toggle').classList.toggle('active', tool === 'ring');
-  pulseControl(document.querySelector(`#tools button[data-tool="${tool}"]`) ?? (tool === 'place' ? document.querySelector(`#palette button[data-el="${state.element}"]`) : $('structure-library-toggle')));
+  pulseControl(document.querySelector(`#tools button[data-tool="${tool}"]`) ?? (tool === 'place' ? document.querySelector(`#recent-palette [data-recent-el="${state.element}"]`) : $('structure-library-toggle')));
   updateToolHint();
+  updateSelectionContext();
+  renderMaterialControls();
 }
 
 // 현재 도구의 사용법과 진행 상태를 한 줄로 보여준다. 도구가 무엇을 하는지 화면에 늘
 // 떠 있어야 한다 — 특히 '결합·차수'는 원자 잇기와 차수 바꾸기를 겸하는데 그 사실이
 // 툴팁에만 있어서 아무도 몰랐다.
 const TOOL_HINT = {
-  view: '<b>보기</b> — 클릭·드래그해도 분자가 바뀌지 않습니다. 마우스로 편하게 돌려보세요(휠 확대, 드래그 회전).',
-  select: '<b>선택</b> — 원자 클릭. Shift+클릭으로 여러 개, 빈 곳 드래그로 박스 선택. 2~4개를 고르면 거리·각도·이면각이 우측에 나옵니다.',
-  erase: '<b>지우개</b> — 원자를 클릭하면 그 원자와, 그 때문에 본체에서 떨어져 나가는 조각까지 함께 지웁니다. 우클릭으로도 됩니다.',
-  bond: '<b>결합·차수</b> — 원자 <u>두 개</u>를 차례로 클릭하면 새 결합을 만듭니다(고리 닫기). 이미 있는 <u>결합선</u>을 클릭하면 차수가 1 → 2 → 3 → 1로 바뀝니다(C=O·C≡N을 이걸로 만듭니다).',
-  place: '<b>붙이기</b> — 원자를 조준하면 빈 자리가 보입니다. <b>R</b> 키나 휠로 자리를 바꾸고 클릭해 붙입니다. 보라색 자리는 비공유 전자쌍이라 붙일 수 없습니다.',
-  ring: '<b>구조 단위 삽입</b> — 원자를 조준하면 선택한 고리 또는 기능기가 미리 보입니다. 클릭해 붙이고, <b>R</b> 키로 배치를 회전할 수 있습니다.',
+  view: '<b>탐색</b> — 드래그·휠로 분자를 관찰합니다. 구조는 바뀌지 않습니다.',
+  select: '<b>선택</b> — 원자·결합을 고른 뒤 위 선택 바에서 전하·결합·복제·삭제를 편집합니다. 빈 곳 드래그로 여러 원자를 고를 수 있습니다.',
+  place: '<b>조립</b> — 앵커 원자를 조준하면 가능한 자리가 나타납니다. 초록 고스트를 클릭해 <b>' + state.element + '</b>을 붙이세요.',
+  ring: '<b>구조 단위</b> — 앵커를 조준해 전체 미리보기를 보고 클릭합니다. <b>R</b> 키 또는 회전 버튼으로 배치를 바꿉니다.',
 };
 
 function updateToolHint() {
   let msg = TOOL_HINT[state.tool] ?? '';
-  if (state.tool === 'place') msg += ` 현재 원소: <b>${state.element}</b>`;
+  if (state.tool === 'place') msg += ` 현재 재료: <b>${state.element}</b>`;
   if (state.tool === 'ring') msg += ` 현재 단위: <b>${RING_TEMPLATES[state.ringTemplate].name}</b> · 회전 <b>${state.ringTwist}°</b>`;
   if (state.tool === 'place' && state.ghost && neighbors(state.mol, state.ghost.anchor).length === 1) {
     msg += ` · 방위각 <b>${state.azimuth}°</b>`;
-  }
-  if (state.tool === 'bond' && state.pendingBond !== null) {
-    const i = state.pendingBond;
-    msg = `<b>결합·차수</b> — <b>${state.mol.atoms[i].el}${i}</b> 선택됨. 이을 원자를 클릭하세요 (Esc 취소).`;
   }
   if (state.tool === 'select' && state.selection.length >= 2) {
     msg += ` · <b>${state.selection.length}개</b> 선택됨`;
@@ -836,20 +963,50 @@ function updateToolHint() {
 }
 
 $('tool-view').onclick = () => setTool('view');
+$('tool-build').onclick = () => setTool('place');
 $('tool-select').onclick = () => setTool('select');
-$('tool-erase').onclick = () => setTool('erase');
-$('tool-bond').onclick = () => setTool('bond');
 
 $('palette').innerHTML = ELEMENTS.map((el, k) =>
   `<button data-el="${el}" title="${k < 9 ? `단축키 ${k + 1}` : ''}">${el}</button>`).join('');
 $('palette').onclick = (ev) => {
   const btn = ev.target.closest('button[data-el]');
   if (!btn) return;
-  state.element = btn.dataset.el;
-  state.slot = 0;
-  setTool('place');
+  useElement(btn.dataset.el);
   pulseControl(btn);
 };
+$('recent-palette').onclick = (ev) => {
+  const button = ev.target.closest('[data-recent-el]');
+  if (button) useElement(button.dataset.recentEl);
+};
+$('element-more').onclick = () => {
+  const palette = $('palette');
+  palette.hidden = !palette.hidden;
+  $('element-more').setAttribute('aria-expanded', String(!palette.hidden));
+  if (!palette.hidden) palette.querySelector('button')?.focus();
+};
+$('rotate-structure').onclick = () => {
+  if (state.tool !== 'ring') return;
+  state.ringTwist = (state.ringTwist + 30) % 360;
+  if (state.ringGhost) {
+    state.ringGhost = previewRing(state.ringGhost.anchor);
+    drawRingGhost();
+  }
+  updateToolHint();
+  toast(`구조 단위 회전 ${state.ringTwist}°`);
+};
+$('selection-bond').onclick = () => {
+  if (state.selection.length !== 2) return;
+  state.pendingBond = state.selection[0];
+  handleBondClick(state.selection[1]);
+};
+$('selection-bond-cycle').onclick = () => {
+  const selected = state.selectedBond ?? (state.selection.length === 2 ? { i: state.selection[0], j: state.selection[1] } : null);
+  const bond = selected && bondFor(selected.i, selected.j);
+  if (bond) handleBondOrderClick(bond);
+};
+$('selection-delete').onclick = deleteSelection;
+$('toast-action').onclick = () => toastAction?.();
+$('redo').onclick = redo;
 
 // ---- 구조 단위 라이브러리 --------------------------------------------------
 // 고리와 기능기를 편집 도구와 분리한다. 학생은 원소 팔레트의 확장으로 인식하고,
@@ -933,6 +1090,9 @@ window.addEventListener('scroll', positionStructureLibrary, { capture: true, pas
 // 쓰지 않고, addSphere/addLine/removeShape만으로 가볍게 갱신한다.
 let ghostShapes = [];
 let blinkOn = true;
+let suppressViewerClick = false;
+let anchorPressTimer = null;
+let touchSlotOpened = false;
 setInterval(() => { blinkOn = !blinkOn; if (state.ghost) drawGhost(); }, 400);
 
 // 초록: 정상. 주황: 붙지만 초원자가 경고. 빨강: 못 붙음(원자가 포화 등).
@@ -1027,6 +1187,83 @@ function previewAttach(anchor, el) {
   };
 }
 
+function closeSlotRing() {
+  const ring = $('slot-ring');
+  if (!ring) return;
+  ring.innerHTML = '';
+  ring.hidden = true;
+}
+
+function closeAnchorCandidates() {
+  const candidates = $('anchor-candidates');
+  if (!candidates) return;
+  candidates.innerHTML = '';
+  candidates.hidden = true;
+}
+
+function previewSlot(anchor, slot) {
+  const previous = state.slot;
+  state.slot = slot;
+  const preview = previewAttach(anchor, state.element);
+  state.slot = previous;
+  return preview;
+}
+
+function openSlotRing(anchor) {
+  if (state.tool !== 'place') return;
+  state.slot = 0;
+  state.azimuth = 0;
+  state.ghost = previewAttach(anchor, state.element);
+  drawGhost();
+  const ring = $('slot-ring');
+  const viewerRect = viewerEl.getBoundingClientRect();
+  const previews = state.ghost.slots.map((_, slot) => previewSlot(anchor, slot));
+  ring.innerHTML = previews.map((preview, slot) => {
+    const kind = preview.kinds[slot] === 'lonepair' ? 'lonepair' : '';
+    const valid = preview.ok && preview.kinds[slot] !== 'lonepair';
+    const label = preview.kinds[slot] === 'lonepair' ? '비공유 전자쌍' : valid ? `${slot + 1}번 결합 자리` : (REASON_MSG[preview.reason] ?? '결합 불가');
+    return `<button class="slot-button ${kind}" data-slot="${slot}" aria-label="${label}" aria-current="${slot === state.ghost.slot}">${preview.kinds[slot] === 'lonepair' ? 'LP' : slot + 1}</button>`;
+  }).join('');
+  ring.querySelectorAll('[data-slot]').forEach((button, slot) => {
+    const preview = previews[slot];
+    const screen = viewer.modelToScreen({ x: preview.pos[0], y: preview.pos[1], z: preview.pos[2] });
+    button.style.left = `${screen.x - viewerRect.left - window.scrollX}px`;
+    button.style.top = `${screen.y - viewerRect.top - window.scrollY}px`;
+    button.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (preview.kinds[slot] === 'lonepair') {
+        toast('비공유 전자쌍 자리에는 원자를 붙일 수 없습니다', 'err');
+        return;
+      }
+      if (!preview.ok) {
+        toast(REASON_MSG[preview.reason] ?? '결합할 수 없습니다', 'err');
+        return;
+      }
+      closeSlotRing();
+      attachAtom(anchor, { dir: preview.slots[slot] });
+    });
+  });
+  ring.hidden = false;
+}
+
+function openAnchorCandidates(hits, px, py) {
+  const candidates = $('anchor-candidates');
+  const rect = viewerEl.getBoundingClientRect();
+  candidates.innerHTML = hits.slice(0, 4).map(({ index }) => `<button class="anchor-candidate" data-anchor-candidate="${index}" aria-label="${state.mol.atoms[index].el}${index} 선택">${state.mol.atoms[index].el}${index}</button>`).join('');
+  candidates.querySelectorAll('[data-anchor-candidate]').forEach((button, offset) => {
+    button.style.left = `${px - rect.left - window.scrollX + offset * 44}px`;
+    button.style.top = `${py - rect.top - window.scrollY - 48}px`;
+    button.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeAnchorCandidates();
+      openSlotRing(Number(button.dataset.anchorCandidate));
+    });
+  });
+  candidates.hidden = false;
+}
+
 viewerEl.addEventListener('pointermove', (ev) => {
   if (state.tool !== 'place') return;
   const anchor = pickAtom(ev.pageX, ev.pageY, 40);
@@ -1037,7 +1274,31 @@ viewerEl.addEventListener('pointermove', (ev) => {
   blinkOn = true;
   drawGhost();
 });
-viewerEl.addEventListener('pointerleave', () => clearGhost());
+viewerEl.addEventListener('pointerleave', () => { clearGhost(); closeAnchorCandidates(); });
+viewerEl.addEventListener('pointerdown', (ev) => {
+  if (state.tool !== 'place' || ev.pointerType !== 'touch') return;
+  const hits = pickAtomCandidates(ev.pageX, ev.pageY, 46);
+  if (!hits.length) return;
+  touchSlotOpened = false;
+  clearTimeout(anchorPressTimer);
+  anchorPressTimer = window.setTimeout(() => {
+    touchSlotOpened = true;
+    suppressViewerClick = true;
+    if (hits.length > 1) openAnchorCandidates(hits, ev.pageX, ev.pageY);
+    else openSlotRing(hits[0].index);
+  }, 280);
+});
+viewerEl.addEventListener('pointerup', (ev) => {
+  clearTimeout(anchorPressTimer);
+  if (ev.target.closest('.slot-button, .anchor-candidate')) return;
+  if (state.tool !== 'place' || ev.pointerType !== 'touch' || touchSlotOpened) return;
+  const hits = pickAtomCandidates(ev.pageX, ev.pageY, 46);
+  if (!hits.length) return;
+  suppressViewerClick = true;
+  if (hits.length > 1) openAnchorCandidates(hits, ev.pageX, ev.pageY);
+  else openSlotRing(hits[0].index);
+});
+viewerEl.addEventListener('pointercancel', () => clearTimeout(anchorPressTimer));
 
 // ---- 고리 도구 고스트 미리보기 --------------------------------------------
 // place 도구의 previewAttach/drawGhost/clearGhost와 같은 패턴: computeRingPlacement로
@@ -1161,8 +1422,7 @@ function onBoxUp(ev) {
 // 따로 두지 않는다 — 나중에 어긋나는 원인이 된다).
 function handleAtomClick(hit, shiftKey) {
   if (state.tool === 'view') return; // 보기 도구는 클릭해도 아무 일도 일어나지 않는다.
-  if (state.tool === 'erase') { deleteAtom(hit); return; }
-  if (state.tool === 'bond') { handleBondClick(hit); return; }
+  state.selectedBond = null;
   if (shiftKey) toggleSelect(hit);
   else { state.selection = [hit]; render(); }
   signalViewer('select');
@@ -1180,7 +1440,7 @@ function handleBondOrderClick(bond) {
   }
   // cycleBondOrder가 이미 제자리에서 바꿔버렸으므로, 되돌리기 스냅샷은 되돌린 뒤에 찍는다.
   bond.order = r.order === 1 ? 3 : r.order - 1;
-  pushUndo();
+  pushUndo('결합 차수 변경');
   bond.order = r.order;
   aromatize(state.mol); // 케쿨레 고리가 완성됐으면 C_R/order 1.5로 승격(그 외엔 무동작)
   playClick(660 + r.order * 220);
@@ -1214,7 +1474,7 @@ function handleBondClick(hit) {
     signalViewer('error');
     return;
   }
-  pushUndo();
+  pushUndo('결합 만들기');
   addBond(state.mol, anchor, hit, 1);
   aromatize(state.mol); // 고리를 닫아 케쿨레 구조가 완성됐으면 승격(그 외엔 무동작)
   // 고리를 닫은 경우(branchAtoms가 null — 고리 결합)만 완화를 돌려 실제 구조로 만든다.
@@ -1229,6 +1489,11 @@ function handleBondClick(hit) {
 
 // ---- 일반 클릭(드래그 없는 pointerup) -------------------------------------
 viewerEl.addEventListener('click', (ev) => {
+  if (ev.target.closest('.slot-button, .anchor-candidate')) return;
+  if (suppressViewerClick) {
+    suppressViewerClick = false;
+    return;
+  }
   if (state.tool === 'place') {
     if (!state.ghost) return;
     if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
@@ -1246,9 +1511,9 @@ viewerEl.addEventListener('click', (ev) => {
   }
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
   if (hit === -1) {
-    if (state.tool === 'bond') {
-      const b = pickBond(ev.pageX, ev.pageY);
-      if (b) handleBondOrderClick(b);
+    if (state.tool === 'select') {
+      const bond = pickBond(ev.pageX, ev.pageY);
+      if (bond) selectBond(bond);
     }
     return;
   }
@@ -1261,7 +1526,12 @@ viewerEl.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
   if (state.flat || state.tool === 'view') return; // 2D가 위에 덮여 있으면 아래 핸들러가 처리한다. 보기 도구는 우클릭도 무시한다.
   const hit = pickAtom(ev.pageX, ev.pageY, 24);
-  if (hit !== -1) deleteAtom(hit);
+  if (hit !== -1) {
+    state.selection = [hit];
+    state.selectedBond = null;
+    render();
+    toast('선택됨 — 위 선택 바에서 삭제할 수 있습니다');
+  }
 });
 
 // ---- 2D 골격식 화면에서의 레고 조립(4단계) ---------------------------------
@@ -1274,21 +1544,18 @@ let blink2dOn = true;
 setInterval(() => { blink2dOn = !blink2dOn; if (state.flat && ghost2d) renderFlat(); }, 400);
 
 // canBond는 위치가 아니라 원자가·타입만 보므로(snap.js 참고) 좌표 없는 시험 삽입으로 충분하다.
-function previewAttach2D(anchor, el) {
+function previewAttach2D(anchor, el, dir = null) {
   const idx = addAtom(state.mol, el, [0, 0, 0]);
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
-  return { anchorIdx: anchor, el, ok: check.ok, reason: check.reason };
+  return { anchorIdx: anchor, el, ok: check.ok, reason: check.reason, dir };
 }
 
 // render()(energy() 포함, O(n²))를 부르지 않는 경량 갱신 — pointermove/깜빡임 전용.
 function renderFlat() {
   if (!state.flat) return;
   const ghost = ghost2d && { ...ghost2d, opacity: blink2dOn ? 0.6 : 0.22 };
-  const bondPreview = state.tool === 'bond' && state.pendingBond !== null
-    ? { a: state.pendingBond, b: bondHover2d, ok: bondHover2d == null ? undefined : canBond(state.mol, state.pendingBond, bondHover2d).ok }
-    : null;
-  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, bondPreview, selection: state.selection });
+  sketch2dEl.innerHTML = renderSVG(state.mol, { ghost, selection: state.selection });
 }
 
 // 2D 화면에서 붙일 방향은 골격식 레이아웃이 정하고, 길이는 3D와 똑같이 attachAtom이
@@ -1297,15 +1564,65 @@ function renderFlat() {
 // 원자 하나를 붙이면 2.5 Å 떨어진 곳에 생겨 신축 에너지가 333 kcal/mol이 됐고, 3D로
 // 돌아갈 때 최적화가 수렴하지 못했다). layout()은 3D 좌표를 읽지 않으므로 이렇게 바꿔도
 // 2D 그림은 달라지지 않는다.
-function attachAtom2D(anchor) {
+function attachAtom2D(anchor, dir2 = null) {
   const pos = layout(state.mol);
   if (!pos.has(anchor)) return;
-  const d = nextChainDir(state.mol, anchor, pos, 1);
+  const d = dir2 ?? nextChainDir(state.mol, anchor, pos, 1);
   attachAtom(anchor, { dir: [d[0], d[1], 0] });
 }
 
+function startFragment2D() {
+  const heavy = state.mol.atoms.filter((atom) => atom.el !== 'H');
+  const right = heavy.length ? Math.max(...heavy.map((atom) => atom.pos[0])) + 3 : 0;
+  pushUndo('새 조각 시작');
+  const index = addAtom(state.mol, state.element, [right, 0, 0]);
+  state.selection = [index];
+  state.selectedBond = null;
+  checkSnaps();
+  render();
+  toast(`${state.element} 새 조각 시작`, 'ok', { actionLabel: '되돌리기', action: undo });
+}
+
+function directionFromSketchDrag(anchorEl, ev) {
+  const rect = anchorEl.getBoundingClientRect();
+  const dx = ev.clientX - (rect.left + rect.width / 2);
+  const dy = (rect.top + rect.height / 2) - ev.clientY;
+  const n = Math.hypot(dx, dy);
+  return n < 4 ? null : [dx / n, dy / n];
+}
+
+let sketchDrag = null;
+let suppressSketchClick = false;
+sketch2dEl.addEventListener('pointerdown', (ev) => {
+  if (!state.flat || state.tool !== 'place') return;
+  const hit = ev.target.closest('[data-atom]');
+  if (!hit) return;
+  sketchDrag = { anchor: Number(hit.dataset.atom), el: hit, startX: ev.clientX, startY: ev.clientY };
+  sketch2dEl.setPointerCapture?.(ev.pointerId);
+});
+sketch2dEl.addEventListener('pointerup', (ev) => {
+  if (!sketchDrag) return;
+  const drag = sketchDrag;
+  sketchDrag = null;
+  const moved = Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY) > 10;
+  if (!moved) return;
+  const dir = directionFromSketchDrag(drag.el, ev);
+  suppressSketchClick = true;
+  if (dir && previewAttach2D(drag.anchor, state.element, dir).ok) attachAtom2D(drag.anchor, dir);
+  else toast('이 방향에는 원자를 붙일 수 없습니다', 'err');
+  ghost2d = null;
+});
+
 sketch2dEl.addEventListener('pointermove', (ev) => {
   if (!state.flat || state.tool !== 'place') return;
+  if (sketchDrag) {
+    const dir = directionFromSketchDrag(sketchDrag.el, ev);
+    if (!dir) return;
+    ghost2d = previewAttach2D(sketchDrag.anchor, state.element, dir);
+    blink2dOn = true;
+    renderFlat();
+    return;
+  }
   const hit = ev.target.closest('[data-atom]');
   if (!hit) { if (ghost2d) { ghost2d = null; renderFlat(); } return; }
   ghost2d = previewAttach2D(Number(hit.dataset.atom), state.element);
@@ -1318,33 +1635,18 @@ sketch2dEl.addEventListener('pointerleave', () => {
   renderFlat();
 });
 
-// '결합' 도구: 앵커를 찍은 뒤 커서가 올라간 원자를 bondHover2d에 담아 점선 미리보기를
-// 그린다(renderSVG의 bondPreview 옵션 — ghost와는 별개 구조, "새 원자 붙이기"가 아니라
-// "기존 원자끼리 잇기"라 의미가 다르다).
-sketch2dEl.addEventListener('pointermove', (ev) => {
-  if (!state.flat || state.tool !== 'bond' || state.pendingBond === null) return;
-  const hit = ev.target.closest('[data-atom]');
-  const idx = hit ? Number(hit.dataset.atom) : null;
-  if (idx === bondHover2d) return;
-  bondHover2d = idx;
-  renderFlat();
-});
-sketch2dEl.addEventListener('pointerleave', () => {
-  if (!state.flat || bondHover2d === null) return;
-  bondHover2d = null;
-  renderFlat();
-});
-
 sketch2dEl.addEventListener('click', (ev) => {
   if (!state.flat) return;
+  if (suppressSketchClick) { suppressSketchClick = false; return; }
   const hit = ev.target.closest('[data-atom]');
   if (!hit) {
     const bh = ev.target.closest('[data-bond]');
-    if (bh && state.tool === 'bond') {
+    if (bh && state.tool === 'select') {
       const [i, j] = bh.dataset.bond.split('-').map(Number);
       const bond = state.mol.bonds.find((b) => b.i === i && b.j === j);
-      if (bond) handleBondOrderClick(bond);
+      if (bond) selectBond(bond);
     }
+    if (state.tool === 'place' && !bh) startFragment2D();
     return;
   }
   const idx = Number(hit.dataset.atom);
@@ -1362,7 +1664,11 @@ sketch2dEl.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
   if (state.tool === 'view') return;
   const hit = ev.target.closest('[data-atom]');
-  if (hit) deleteAtom(Number(hit.dataset.atom));
+  if (hit) {
+    state.selection = [Number(hit.dataset.atom)];
+    state.selectedBond = null;
+    render();
+  }
 });
 
 // ---- 키보드 카메라 -----------------------------------------------------------
@@ -1408,7 +1714,7 @@ document.addEventListener('keyup', (ev) => {
 // 창을 벗어나면 키가 눌린 채로 남아 카메라가 계속 도는 것을 막는다.
 window.addEventListener('blur', () => heldKeys.clear());
 
-// ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소 ----
+// ---- 키보드: Esc 해제, Ctrl+A 전체선택, Del 삭제, Ctrl+D 복제, Ctrl+Z 실행취소, Ctrl+Shift+Z 재실행 ----
 document.addEventListener('keydown', (ev) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
   // 카메라 키는 수식키가 없을 때만 잡는다(Ctrl+A 전체선택, Ctrl+D 복제와 겹치지 않게).
@@ -1419,7 +1725,16 @@ document.addEventListener('keydown', (ev) => {
     if (ev.shiftKey) heldKeys.add('shift'); else heldKeys.delete('shift');
     return;
   }
-  if (ev.key === 'Escape') { state.selection = []; state.pendingBond = null; bondHover2d = null; render(); return; }
+  if (ev.key === 'Escape') {
+    state.selection = [];
+    state.selectedBond = null;
+    state.pendingBond = null;
+    bondHover2d = null;
+    closeSlotRing();
+    closeAnchorCandidates();
+    render();
+    return;
+  }
   if (ev.key === 'r' || ev.key === 'R') {
     if (state.tool === 'ring') {
       state.ringTwist = (state.ringTwist + 30) % 360;
@@ -1435,12 +1750,38 @@ document.addEventListener('keydown', (ev) => {
   // 원소 핫바: 숫자키 1~9가 팔레트 앞 9개 원소에 대응한다(마인크래프트 핫바).
   if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey) {
     const el = ELEMENTS[Number(ev.key) - 1];
-    if (el) { state.element = el; state.slot = 0; setTool('place'); toast(`${el} 선택`); }
+    if (el) useElement(el);
+    return;
+  }
+  if (ev.altKey && /^[1-4]$/.test(ev.key)) {
+    const el = state.recentElements[Number(ev.key) - 1];
+    if (el) useElement(el);
     return;
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'a') { ev.preventDefault(); state.selection = state.mol.atoms.map((_, i) => i); render(); return; }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); undo(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); if (ev.shiftKey) redo(); else undo(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') { ev.preventDefault(); redo(); return; }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'd') { ev.preventDefault(); duplicateSelection(); return; }
+  if (ev.key.toLowerCase() === 'b' && state.selection.length === 2) {
+    ev.preventDefault();
+    $('selection-bond').click();
+    return;
+  }
+  if (ev.key === 'Enter' && state.tool === 'place' && state.selection.length === 1) {
+    ev.preventDefault();
+    openSlotRing(state.selection[0]);
+    $('slot-ring').querySelector('button:not(.lonepair)')?.focus();
+    return;
+  }
+  if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && state.tool === 'select' && state.mol.atoms.length) {
+    ev.preventDefault();
+    const current = state.selection[0] ?? 0;
+    const step = ev.key === 'ArrowRight' ? 1 : -1;
+    state.selection = [(current + step + state.mol.atoms.length) % state.mol.atoms.length];
+    state.selectedBond = null;
+    render();
+    return;
+  }
   if (ev.key === 'Delete' || ev.key === 'Backspace') deleteSelection();
 });
 

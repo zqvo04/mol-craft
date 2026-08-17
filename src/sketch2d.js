@@ -157,7 +157,15 @@ export function layout(mol) {
   if (rings.length) placeRings(rings, pos);
   else pos.set(pickSeed(mol, heavy), [0, 0]);
 
-  growChains(mol, pos);
+  // 새 조각을 시작한 뒤에도 골격식이 깨지지 않도록 모든 연결 성분을 배치한다.
+  // 기존 growChains는 첫 시드와 연결된 성분만 방문하므로, 남은 무거운 원자를 오른쪽 빈
+  // 자리에서 새 시드로 시작해 다시 성장시킨다.
+  while (true) {
+    growChains(mol, pos);
+    const unplaced = heavy.find((i) => !pos.has(i));
+    if (unplaced === undefined) break;
+    pos.set(unplaced, nextFreeSpot(pos));
+  }
   return pos;
 }
 
@@ -310,7 +318,7 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
   // 원인이었다). 아래 -1/+1 패딩이 결합 길이 1과 정확히 같아, 실전에서는 고스트가
   // 대부분 이 여백 안에 들어온다.
   const ghostPos = ghost && pos.has(ghost.anchorIdx)
-    ? add2(pos.get(ghost.anchorIdx), scale2(nextChainDir(mol, ghost.anchorIdx, pos, 1), BOND_LEN))
+    ? add2(pos.get(ghost.anchorIdx), scale2(ghost.dir ?? nextChainDir(mol, ghost.anchorIdx, pos, 1), BOND_LEN))
     : null;
 
   const pts = [...pos.values()];

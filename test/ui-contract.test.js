@@ -39,6 +39,18 @@ test('교육형 인터페이스의 핵심 상호작용 계약이 마크업·앱 
   assert.match(html, /id="charge-minus"/);
   assert.match(html, /id="charge-plus"/);
   assert.match(menuSelect, /createMenuSelect/);
+  assert.match(html, /id="build-console"/);
+  assert.match(html, /id="selection-context"/);
+  assert.match(html, /id="recent-palette"/);
+  assert.match(html, /id="redo"/);
+  assert.match(html, /id="slot-ring"/);
+  assert.match(html, /id="anchor-candidates"/);
+  assert.match(app, /function redo\(\)/);
+  assert.match(app, /function startFragment2D\(\)/);
+  assert.match(app, /function directionFromSketchDrag\(/);
+  assert.match(app, /function openSlotRing\(/);
+  assert.match(app, /function openAnchorCandidates\(/);
+  assert.match(app, /Ctrl\+Shift\+Z/);
 });
 
 test('접근성·감소된 모션 스타일 계약이 유지된다', async () => {
@@ -48,4 +60,16 @@ test('접근성·감소된 모션 스타일 계약이 유지된다', async () =>
   assert.match(html, /prefers-reduced-motion: reduce/);
   assert.match(catalogCss, /prefers-reduced-motion: reduce/);
   assert.match(html, /canvas-halo/);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(html, /aria-label="가능한 결합 자리"/);
+});
+
+test('P5 조립·선택·슬롯 편집은 스크린리더와 키보드 대체 경로를 제공한다', async () => {
+  const [html, app] = await Promise.all([source('index.html'), source('src/app.js')]);
+  assert.match(html, /id="selection-context" aria-label="선택 편집" aria-live="polite"/);
+  assert.match(html, /id="slot-ring" aria-label="가능한 결합 자리"/);
+  assert.match(html, /id="toast" role="status" aria-live="polite"/);
+  assert.match(app, /aria-label="\$\{label\}"/);
+  assert.match(app, /ev\.key === 'Enter' && state\.tool === 'place'/);
+  assert.match(app, /button:not\(\.lonepair\)/);
 });

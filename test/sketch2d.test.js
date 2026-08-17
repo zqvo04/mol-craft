@@ -87,6 +87,18 @@ test('layout: 원자 하나짜리 분자도 처리한다', () => {
   assert.deepEqual(pos.get(0), [0, 0]);
 });
 
+test('layout: 분리된 새 조각도 각 무거운 원자에 2D 좌표를 부여한다', () => {
+  const m = createMolecule();
+  addAtom(m, 'C', [0, 0, 0]);
+  addAtom(m, 'C', [1, 0, 0]);
+  addBond(m, 0, 1);
+  addAtom(m, 'O', [5, 0, 0]); // 빈 캔버스에서 새 조각으로 시작한 산소
+  const pos = layout(m);
+  assert.equal(pos.size, 3);
+  assert.ok(pos.has(2));
+  assert.ok(pos.get(2)[0] > pos.get(1)[0]);
+});
+
 test('renderSVG 규칙 2.1/2.4: 탄소는 라벨 없고, 헤테로원자는 있다', () => {
   const m = createMolecule();
   addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'O', [0, 0, 0]);
