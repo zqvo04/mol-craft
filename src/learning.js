@@ -124,7 +124,7 @@ export function cipPriorities(mol, center, branches = neighbors(mol, center)) {
 
 export function assignRS(mol, center) {
   const branches = neighbors(mol, center);
-  if (mol.atoms[center]?.el !== 'C' || branches.length !== 4) return null;
+  if (mol.atoms[center]?.el !== 'C' || branches.length !== 4 || mol.atoms[center].stereoUnspecified) return null;
   const { ranked, distinct } = rankCipBranches(mol, center, branches);
   if (!distinct) return null;
   const [a, b, c, d] = ranked.map((index) => sub(mol.atoms[index].pos, mol.atoms[center].pos));

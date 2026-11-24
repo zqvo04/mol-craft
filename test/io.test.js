@@ -92,3 +92,17 @@ test('XYZ는 전하를 주석으로만 밝히고 PDB는 제한된 formal charge 
   const chargedPdbRows = toPDB(molecule).split('\n').filter((line) => line.startsWith('HETATM') && /[1][+-]$/.test(line));
   assert.equal(chargedPdbRows.length, 2);
 });
+
+test('encodeState/decodeState가 입체 미지정 표시를 보존한다', async () => {
+  const { encodeState, decodeState } = await import('../src/io.js');
+  const mol = { atoms: [{ el: 'C', pos: [0, 0, 0], stereoUnspecified: true }, { el: 'H', pos: [1, 0, 0] }], bonds: [{ i: 0, j: 1, order: 1 }] };
+  const back = decodeState(encodeState(mol));
+  assert.equal(back.atoms[0].stereoUnspecified, true);
+  assert.equal(back.atoms[1].stereoUnspecified, undefined);
+});
+
+test('압축 해시(encodeStateAsync)도 입체 미지정 표시를 보존한다', async () => {
+  const { encodeStateAsync, decodeStateAsync } = await import('../src/io.js');
+  const mol = { atoms: [{ el: 'C', pos: [0, 0, 0], stereoUnspecified: true }], bonds: [] };
+  assert.equal((await decodeStateAsync(await encodeStateAsync(mol))).atoms[0].stereoUnspecified, true);
+});

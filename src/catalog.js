@@ -1,5 +1,7 @@
 import { SUPABASE } from './config.js';
 import { createMenuSelect } from './menu-select.js';
+import { minimize } from './uff.js';
+import { assignRS } from './learning.js';
 
 const FAVORITES_KEY = 'mol-craft:catalog-favorites';
 const COMPARE_KEY = 'mol-craft:catalog-compare';
@@ -56,7 +58,11 @@ export function parseSdf(sdf) {
     const x = Number(line.slice(0, 10)); const y = Number(line.slice(10, 20)); const z = Number(line.slice(20, 30));
     const el = line.slice(31, 34).trim();
     if (![x, y, z].every(Number.isFinite) || !el) return null;
-    atoms.push({ el, pos: [x, y, z] });
+    const atom = { el, pos: [x, y, z] };
+    // V2000 원자 블록의 전하 코드(1=+3 … 3=+1, 5=−1 … 7=−3). 'M  CHG' 줄이 있으면 아래에서 덮어쓴다.
+    const code = Number.parseInt(line.slice(36, 39), 10);
+    if (code >= 1 && code <= 7 && code !== 4) atom.charge = 4 - code;
+    atoms.push(atom);
   }
   const bonds = [];
   for (let index = 0; index < bondCount; index++) {
@@ -65,7 +71,21 @@ export function parseSdf(sdf) {
     const j = Number.parseInt(line.slice(3, 6), 10) - 1;
     const rawOrder = Number.parseInt(line.slice(6, 9), 10);
     if (!Number.isInteger(i) || !Number.isInteger(j) || i < 0 || j < 0 || i >= atomCount || j >= atomCount) return null;
-    bonds.push({ i: Math.min(i, j), j: Math.max(i, j), order: rawOrder === 4 ? 1.5 : Math.max(1, Math.min(3, rawOrder || 1)) });
+    const bond = { i: Math.min(i, j), j: Math.max(i, j), order: rawOrder === 4 ? 1.5 : Math.max(1, Math.min(3, rawOrder || 1)) };
+    // 쐐기(1)/해시(6) 표시는 2D 좌표에서 3D를 만들 때 입체배치를 지키는 데 쓴다. 좁은 쪽 = 첫 원자.
+    const stereo = Number.parseInt(line.slice(9, 12), 10);
+    if (stereo === 1 || stereo === 6) bond.wedge = { from: i, to: j, up: stereo === 1 };
+    bonds.push(bond);
+  }
+  // 'M  CHG  n aaa vvv …' — 존재하면 원자 블록 전하 코드 전체를 대체한다(V2000 규약).
+  const chargeLines = lines.slice(4 + atomCount + bondCount).filter((line) => line.startsWith('M  CHG'));
+  if (chargeLines.length) atoms.forEach((atom) => { delete atom.charge; });
+  for (const line of chargeLines) {
+    const fields = line.slice(6).trim().split(/\s+/).map(Number);
+    for (let k = 1; k + 1 < fields.length; k += 2) {
+      const atom = atoms[fields[k] - 1];
+      if (atom && Number.isInteger(fields[k + 1]) && fields[k + 1] !== 0) atom.charge = fields[k + 1];
+    }
   }
   return { atoms, bonds };
 }
@@ -105,12 +125,52 @@ async function loadCatalogData() {
   return { records: await response.json(), source: 'local catalogue' };
 }
 
-async function getSdfMolecule(record) {
+// PubChem에 3D 레코드가 없거나(염·일부 생체분자) 서버가 바빠 2D로 떨어지면 좌표가 평면이라
+// sp³ 중심이 모두 '각도 편차'로 찍혔다. 2D를 Å 단위로 키우고, 쐐기/해시 끝 원자를 앞/뒤로 띄워
+// 입체배치를 보존한 뒤 UFF로 최적화한다. 나머지 원자는 평면 안장점에 갇히지 않게 z를 조금 흔든다.
+export function liftFlatStructure(molecule, { minimizeImpl = minimize } = {}) {
+  const { atoms, bonds } = molecule;
+  const heavyBonds = bonds.filter((b) => atoms[b.i].el !== 'H' && atoms[b.j].el !== 'H');
+  const lengths = (heavyBonds.length ? heavyBonds : bonds).map((b) => Math.hypot(
+    atoms[b.i].pos[0] - atoms[b.j].pos[0], atoms[b.i].pos[1] - atoms[b.j].pos[1],
+  )).sort((a, b) => a - b);
+  const factor = lengths.length && lengths[lengths.length >> 1] > 0 ? 1.5 / lengths[lengths.length >> 1] : 1;
+  const flat = atoms.map((atom) => [atom.pos[0] * factor, atom.pos[1] * factor]);
+  const wedgeCenters = new Set(bonds.filter((b) => b.wedge).map((b) => b.wedge.from));
+  const embed = (offset) => {
+    atoms.forEach((atom, index) => { atom.pos = [...flat[index], 0.05 * Math.sin(index * 12.9898)]; });
+    for (const b of bonds) {
+      if (b.wedge) atoms[b.wedge.to].pos[2] = atoms[b.wedge.from].pos[2] + (b.wedge.up ? offset : -offset);
+    }
+  };
+  embed(0.8);
+  const intended = new Map([...wedgeCenters].map((c) => [c, assignRS(molecule, c)?.configuration]).filter(([, v]) => v));
+  // 평면에 가까운 시작점에서는 최적화가 중심을 반대편으로 밀어 R/S가 뒤집힐 수 있다 → 검사 후 더 크게 띄워 재시도.
+  for (const offset of [0.8, 1.4, 2.0]) {
+    if (offset !== 0.8) embed(offset);
+    minimizeImpl(molecule, { maxSteps: 300 });
+    if ([...intended].every(([c, config]) => assignRS(molecule, c)?.configuration === config)) break;
+  }
+  // 쐐기가 없는 입체중심은 PubChem 레코드에서 입체가 미지정이다 — 흔든 z가 정한 임의의 R/S를 보여주면 안 된다.
+  atoms.forEach((atom, index) => {
+    if (!wedgeCenters.has(index) && assignRS(molecule, index)) atom.stereoUnspecified = true;
+  });
+  return molecule;
+}
+
+async function getSdfMolecule(record, onStatus = () => {}) {
   if (!record.pubchemCid) return null;
   for (const type of ['3d', '2d']) {
     try {
       const response = await fetch(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${record.pubchemCid}/record/SDF/?record_type=${type}`);
       const molecule = response.ok ? parseSdf(await response.text()) : null;
+      if (molecule && type === '2d') {
+        if (!molecule.atoms.every((atom) => SUPPORTED_ELEMENTS.has(atom.el))) return molecule; // 아래에서 지원 원소 안내
+        onStatus('2D 구조식에서 3D 생성 중…');
+        // shortcut: 최적화는 메인 스레드에서 돈다(100원자 이상은 수 초). 느려지면 Web Worker로 옮긴다.
+        await new Promise((resolve) => setTimeout(resolve, 30)); // 상태 문구가 먼저 그려지게 한 프레임 양보
+        return Object.assign(liftFlatStructure(molecule), { generated3d: true });
+      }
       if (molecule) return molecule;
     } catch { /* 다음 형식을 시도한다. */ }
   }
@@ -235,7 +295,7 @@ export function initCatalog() {
     else if (target.dataset.compare !== undefined) toggleCompare(id);
     else if (target.dataset.load !== undefined) {
       target.disabled = true; target.textContent = '구조 불러오는 중…';
-      const molecule = await getSdfMolecule(records.find((record) => record.id === id));
+      const molecule = await getSdfMolecule(records.find((record) => record.id === id), (text) => { target.textContent = text; });
       if (!molecule) { window.alert('PubChem 구조 데이터를 불러오지 못했습니다.'); }
       else if (!molecule.atoms.every((atom) => SUPPORTED_ELEMENTS.has(atom.el))) { window.alert('이 분자는 현재 조립 도구가 지원하지 않는 원소를 포함합니다. 카탈로그 상세·비교는 계속 이용할 수 있습니다.'); }
       else { document.dispatchEvent(new CustomEvent('mol-craft-catalog-load', { detail: { molecule, name: label(records.find((record) => record.id === id)) } })); dialog.close(); }

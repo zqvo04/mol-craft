@@ -462,9 +462,11 @@ function updateLearningPanel() {
   const stereo = stereochemicalAssignments(state.mol);
   const rsCards = stereo.rs.map((assignment) => `<article class="learning-card concept"><b>C${assignment.center}: ${assignment.configuration}</b><p>CIP 우선순위 ${assignment.priorities.map(({ priority, element }) => `${priority}.${element}`).join(' → ')}. 최하위 우선순위를 뒤로 둔 3D 부호 계산 결과입니다.</p></article>`).join('');
   const ezCards = stereo.ez.map((assignment) => `<article class="learning-card concept"><b>C${assignment.bond[0]}=C${assignment.bond[1]}: ${assignment.configuration}</b><p>양쪽 탄소에서 CIP 최우선 치환기(C${assignment.leftHigh}, C${assignment.rightHigh})의 상대 위치를 비교했습니다. cis/trans 대신 E/Z를 사용합니다.</p></article>`).join('');
+  const unspecified = state.mol.atoms.map((atom, index) => (atom.stereoUnspecified ? `C${index}` : null)).filter(Boolean);
+  const unspecifiedCard = unspecified.length ? `<article class="learning-card"><b>입체 미지정: ${unspecified.join(', ')}</b><p>PubChem 원본 레코드가 이 입체중심의 배치를 정하지 않았습니다(라세미·아노머 혼합 등). 3D 생성 때 임의로 정해진 모양이므로 R/S를 표시하지 않습니다.</p></article>` : '';
   $('learning-stereo').innerHTML = isEducationalSketch
     ? '<article class="learning-card limit"><b>교육용 골격의 입체화학 경계</b><p>이 AMP 모식도는 핵염기·리보스·인산의 연결을 읽기 위한 구조입니다. 케쿨레 결합선만으로 핵염기 내부 C=C의 E/Z를 판정하거나 3D 좌표로 R/S를 해석하지 않습니다.</p></article>'
-    : `${rsCards || ''}${ezCards || ''}<article class="learning-card limit"><b>판정 경계</b><p>${stereo.rs.length || stereo.ez.length ? 'CIP 동점·고리·동위원소·전하를 완전하게 다루지 못하면 판정을 보류합니다.' : '서로 다른 4개 가지를 갖는 sp³ 탄소 또는 양쪽에 다른 치환기가 있는 C=C를 만들면 판정합니다.'} 광학 회전 (+/−)과 UFF 에너지로 R/S를 예측하지 않습니다.</p></article>`;
+    : `${rsCards || ''}${ezCards || ''}${unspecifiedCard}<article class="learning-card limit"><b>판정 경계</b><p>${stereo.rs.length || stereo.ez.length ? 'CIP 동점·고리·동위원소·전하를 완전하게 다루지 못하면 판정을 보류합니다.' : '서로 다른 4개 가지를 갖는 sp³ 탄소 또는 양쪽에 다른 치환기가 있는 C=C를 만들면 판정합니다.'} 광학 회전 (+/−)과 UFF 에너지로 R/S를 예측하지 않습니다.</p></article>`;
   const candidateCenters = (state.selection.length ? state.selection : state.mol.atoms.map((_, i) => i))
     .filter((index) => neighbors(state.mol, index).length >= 2)
     .slice(0, 3);
@@ -2052,7 +2054,9 @@ document.addEventListener('mol-craft-catalog-load', (event) => {
   firstRender = true;
   checkSnaps();
   render();
-  toast(`${name} 구조를 불러왔습니다`);
+  toast(molecule.generated3d
+    ? `${name}: PubChem 3D 좌표가 없어 2D 구조식(쐐기 포함)에서 3D를 생성·최적화했습니다`
+    : `${name} 구조를 불러왔습니다`);
 });
 
 initCatalog();

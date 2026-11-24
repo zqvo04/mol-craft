@@ -48,7 +48,9 @@ export function typeAtom(mol, i) {
     // 아마이드 N의 비공유전자쌍은 C=O와 공명해 C–N에 부분 이중결합을 만든다.
     // 전하·공명 에너지를 계산하는 모델은 아니지만, N_R(sp²)로 승격하면 120° 기하,
     // out-of-plane 억제, sp²–sp² 비틀림 항이 함께 적용돼 평면성 데모가 가능해진다.
-    case 'N': return isConjugatedNitrogen(mol, i) ? 'N_R' : (maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3');
+    // 이웃 3개 + 이중결합인 N(니트로·질산·이미늄, 형식전하 +1)은 비공유쌍이 없어 평면 삼각형(120°)이다.
+    // N_2(111°, 비공유쌍 있는 이민형)로 두면 질산의 O–N–O가 '각도 편차 20°'로 찍혔다.
+    case 'N': return isConjugatedNitrogen(mol, i) || (n === 3 && maxOrder === 2) ? 'N_R' : (maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3');
     case 'O': return maxOrder >= 2 ? 'O_2' : 'O_3';
     // S/P도 C/N/O와 같은 원칙: 실제 결합차수 합(bo)이 원자가·혼성을 정하지, 이웃 개수(n)가
     // 정하지 않는다. 예전엔 n>=3이면 무조건 S_3+6(SF6급 육배위, theta0=90°)이라, 메틸 두 개

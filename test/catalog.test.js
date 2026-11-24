@@ -30,3 +30,38 @@ test('structure image helpers expose a bounded loading state model and a formula
   assert.equal(structureFallbackText({ molecularFormula: 'C9H8O4', commonName: 'Aspirin' }), 'C9H8O4');
   assert.equal(structureFallbackText({ commonName: 'Aspirin' }), 'Aspirin');
 });
+
+const fixture = async (name) => (await import('node:fs')).readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+
+test('parseSdf는 M  CHG 형식전하를 읽어 질산을 원자가 오류 없이 불러온다', async () => {
+  const { stability } = await import('../src/snap.js');
+  const m = parseSdf(await fixture('nitric-acid-pubchem3d.sdf'));
+  assert.deepEqual(m.atoms.map((a) => a.charge ?? 0), [0, -1, 0, 1, 0]);
+  assert.deepEqual(stability(m).issues, []);
+});
+
+test('parseSdf는 M  CHG가 없을 때 원자 블록 전하 코드를 읽는다', () => {
+  const sdf = ['x', '', '', '  2  1  0  0  0  0  0  0  0  0999 V2000',
+    '    0.0000    0.0000    0.0000 N   0  3  0  0  0  0  0  0  0  0  0  0',
+    '    1.0000    0.0000    0.0000 O   0  5  0  0  0  0  0  0  0  0  0  0',
+    '  1  2  1  0  0  0  0', 'M  END'].join('\n');
+  assert.deepEqual(parseSdf(sdf).atoms.map((a) => a.charge), [1, -1]);
+});
+
+test('2D SDF에서 만든 3D 구조는 쐐기의 R/S를 보존하고 미지정 입체중심은 판정하지 않는다', async () => {
+  const { liftFlatStructure } = await import('../src/catalog.js');
+  const { stereochemicalAssignments } = await import('../src/learning.js');
+  const { stability } = await import('../src/snap.js');
+  // 기대값: RDKit rdCIPLabeler가 2D 쐐기에서 읽은 라벨. 글루코스 아노머 탄소(10)는 레코드에서 미지정.
+  const expected = {
+    'alanine-pubchem2d.sdf': { 3: 'S' },
+    'glucose-pubchem2d.sdf': { 6: 'S', 7: 'S', 8: 'R', 9: 'R' },
+    'sucrose-pubchem2d.sdf': { 11: 'S', 12: 'S', 13: 'S', 14: 'R', 15: 'R', 16: 'R', 17: 'S', 18: 'S', 19: 'R' },
+  };
+  for (const [name, want] of Object.entries(expected)) {
+    const m = liftFlatStructure(parseSdf(await fixture(name)));
+    assert.ok(m.atoms.some((a) => Math.abs(a.pos[2]) > 0.3), `${name}: 평면에 남아 있다`);
+    assert.deepEqual(Object.fromEntries(stereochemicalAssignments(m).rs.map((x) => [x.center, x.configuration])), want, name);
+    assert.ok(stability(m).score >= 88, `${name}: 최적화 후 안정도 ${stability(m).score}`);
+  }
+});

@@ -63,7 +63,7 @@ const unb64url = (s) => atob(s.replace(/-/g, '+').replace(/_/g, '/'));
 
 export function encodeState(mol) {
   const compact = {
-    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null]),
+    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null, x.stereoUnspecified ? 1 : 0]),
     b: mol.bonds.map((x) => [x.i, x.j, x.order]),
   };
   return b64url(JSON.stringify(compact));
@@ -72,7 +72,7 @@ export function encodeState(mol) {
 export function decodeState(str) {
   const o = JSON.parse(unb64url(str));
   return {
-    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}) })),
+    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null, unspecified = 0]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}), ...(unspecified ? { stereoUnspecified: true } : {}) })),
     bonds: o.b.map(([i, j, order]) => ({ i, j, order })),
   };
 }
@@ -93,7 +93,7 @@ const b64urlToBytes = (s) =>
 export async function encodeStateAsync(mol) {
   if (typeof CompressionStream === 'undefined') return encodeState(mol);
   const json = JSON.stringify({
-    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null]),
+    a: mol.atoms.map((x) => [x.el, ...x.pos.map((v) => Math.round(v * 1000) / 1000), Number.isFinite(x.charge) ? Math.trunc(x.charge) : 0, x.nucleobase ?? null, x.stereoUnspecified ? 1 : 0]),
     b: mol.bonds.map((x) => [x.i, x.j, x.order]),
   });
   const packed = await streamThrough(new TextEncoder().encode(json), new CompressionStream('deflate-raw'));
@@ -105,7 +105,7 @@ export async function decodeStateAsync(str) {
   const raw = await streamThrough(b64urlToBytes(str.slice(1)), new DecompressionStream('deflate-raw'));
   const o = JSON.parse(new TextDecoder().decode(raw));
   return {
-    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}) })),
+    atoms: o.a.map(([el, x, y, z, charge = 0, nucleobase = null, unspecified = 0]) => ({ el, pos: [x, y, z], charge: Math.trunc(charge) || 0, ...(nucleobase ? { nucleobase } : {}), ...(unspecified ? { stereoUnspecified: true } : {}) })),
     bonds: o.b.map(([i, j, order]) => ({ i, j, order })),
   };
 }
