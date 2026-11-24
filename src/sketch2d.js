@@ -167,24 +167,15 @@ export function layout(mol) {
     if (unplaced === undefined) break;
     pos.set(unplaced, nextFreeSpot(pos));
   }
-  // 교재식 방향: 사슬의 주축(PCA)을 수평으로 눕힌다(부탄이 계단 Z가 아니라 /\/\ 로 보이게).
-  // 회전은 강체 회전이라 키랄성은 그대로이고, 쐐기 계산(stereoWedges)은 이 최종 좌표를 쓴다.
+  // 교재식 방향: 첫 결합을 수평에서 -30°로 고정해 사슬이 수평 축의 /\/\ 지그재그로 보이게 한다.
+  // 분자 전체(PCA)로 정하면 원자를 하나 붙일 때마다 그림 전체가 돌거나 뒤집혀(2D 편집 중) 쓰지 않는다.
+  // 강체 회전이라 키랄성은 그대로이고, 쐐기 계산(stereoWedges)은 이 최종 좌표를 쓴다.
   // shortcut: 고리 분자는 고리가 기울어 보이지 않게 회전하지 않는다; 필요하면 고리 정렬 규칙 추가.
-  if (!rings.length) {
-    const c = centroid(pos);
-    let sxx = 0, syy = 0, sxy = 0;
-    for (const p of pos.values()) { const x = p[0] - c[0], y = p[1] - c[1]; sxx += x * x; syy += y * y; sxy += x * y; }
-    const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-    // 사슬 결합각은 모두 같은 값 mod 60°이므로, 결합이 수평과 ±30°가 되게 가장 가까운 쪽으로 미세 조정한다.
-    const b = mol.bonds.find((x) => pos.has(x.i) && pos.has(x.j));
-    let rot = -theta;
-    if (b) {
-      const [p, q] = [pos.get(b.i), pos.get(b.j)];
-      const phi = (Math.atan2(q[1] - p[1], q[0] - p[0]) + rot) % (Math.PI / 3);
-      const d = (Math.PI / 6 - phi) % (Math.PI / 3);
-      rot += d > Math.PI / 6 ? d - Math.PI / 3 : d < -Math.PI / 6 ? d + Math.PI / 3 : d;
-    }
-    for (const [i, p] of pos) pos.set(i, rotate2(p, rot));
+  const first = !rings.length && mol.bonds.find((x) => pos.has(x.i) && pos.has(x.j));
+  if (first) {
+    const [p, q] = [pos.get(first.i), pos.get(first.j)];
+    const rot = -Math.PI / 6 - Math.atan2(q[1] - p[1], q[0] - p[0]);
+    for (const [i, pt] of pos) pos.set(i, rotate2(pt, rot));
   }
   return pos;
 }

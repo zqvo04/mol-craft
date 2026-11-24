@@ -27,7 +27,7 @@ function otherEnd(bond, index) {
 // 우선순위가 높은 가지부터 비교해야 하는 규칙이 깨져, 당의 아노머 탄소(O 두 개)처럼
 // 첫 구가 같은 경우 R/S가 뒤집혔다. 다중결합·고리 닫힘은 복제 원자(자식 없음)로 처리한다.
 // 동위원소·전하·규칙 2 이후(입체 기술자 비교)는 다루지 않으므로 끝까지 같으면 판정 보류.
-const CIP_MAX_SPHERES = 12;
+const CIP_MAX_SPHERES = 8;
 
 function cipNode(atom, parent, path, duplicate = false) {
   return { atom, parent, path, duplicate };
@@ -49,18 +49,47 @@ function cipChildren(mol, node) {
 
 const cipZ = (mol, node) => atomicNumber(mol.atoms[node.atom]);
 
-// 음수: a가 우선. 같은 원자번호의 자식끼리는 재귀 비교로 순서를 정한 뒤 너비 우선으로 내려간다.
-function compareCipNodes(mol, a, b, budget = CIP_MAX_SPHERES) {
+// 같은 원자번호 형제의 탐색 순서를 정하는 하위 트리 지문(구별 원자번호 목록, 깊이 제한).
+// 재귀 비교로 형제를 정렬하면 큐베인·도데카헤드레인처럼 끝까지 동률인 케이지에서 지수 시간이
+// 걸렸다(도데카헤드레인 렌더 1회 약 60초). 지문은 얕은 깊이(최대 3구)만 보고, 고리 닫힘이
+// 경로에 따라 달라지므로 경로를 무시하는 메모는 쓰지 않는다(쓰면 대칭 케이지가 키랄로 오판정됨).
+function cipSignature(mol, node, depth) {
+  let layer = [node];
+  const out = [];
+  for (let d = 0; d < depth && layer.length; d++) {
+    layer = layer.flatMap((n) => cipChildren(mol, n));
+    out.push(...layer.map((n) => cipZ(mol, n)).sort((x, y) => y - x), -1);
+  }
+  return out;
+}
+
+function orderedCipChildren(mol, node, depth) {
+  return cipChildren(mol, node).sort((x, y) => {
+    const dz = cipZ(mol, y) - cipZ(mol, x);
+    if (dz !== 0) return dz;
+    const sx = cipSignature(mol, x, depth);
+    const sy = cipSignature(mol, y, depth);
+    for (let k = 0; k < Math.max(sx.length, sy.length); k++) {
+      const delta = (sy[k] ?? -2) - (sx[k] ?? -2);
+      if (delta !== 0) return delta;
+    }
+    return 0;
+  });
+}
+
+// 음수: a가 우선. 구마다 높은 순위 가지의 자식 집합부터 차례로 비교한다(규칙 1a 계층 탐색).
+function compareCipNodes(mol, a, b) {
   const dz = cipZ(mol, b) - cipZ(mol, a);
   if (dz !== 0) return dz;
   let left = [a];
   let right = [b];
-  for (let sphere = 0; sphere < budget && (left.length || right.length); sphere++) {
+  for (let sphere = 0; sphere < CIP_MAX_SPHERES && (left.length || right.length); sphere++) {
     const nextLeft = [];
     const nextRight = [];
+    const depth = Math.min(3, CIP_MAX_SPHERES - sphere - 1);
     for (let k = 0; k < Math.max(left.length, right.length); k++) {
-      const ca = left[k] ? orderedCipChildren(mol, left[k], budget - sphere - 1) : [];
-      const cb = right[k] ? orderedCipChildren(mol, right[k], budget - sphere - 1) : [];
+      const ca = left[k] ? orderedCipChildren(mol, left[k], depth) : [];
+      const cb = right[k] ? orderedCipChildren(mol, right[k], depth) : [];
       for (let m = 0; m < Math.max(ca.length, cb.length); m++) {
         const delta = (cb[m] ? cipZ(mol, cb[m]) : 0) - (ca[m] ? cipZ(mol, ca[m]) : 0);
         if (delta !== 0) return delta;
@@ -72,11 +101,6 @@ function compareCipNodes(mol, a, b, budget = CIP_MAX_SPHERES) {
     right = nextRight;
   }
   return 0;
-}
-
-function orderedCipChildren(mol, node, budget) {
-  const children = cipChildren(mol, node);
-  return budget > 0 ? children.sort((x, y) => compareCipNodes(mol, x, y, budget)) : children.sort((x, y) => cipZ(mol, y) - cipZ(mol, x));
 }
 
 function compareCipBranches(mol, center, left, right) {
@@ -120,10 +144,10 @@ function perpendicularTo(axis, vector) {
   return norm(projected) > 1e-7 ? unit(projected) : null;
 }
 
-export function assignEZ(mol, bond) {
+export function assignEZ(mol, bond, rings = findRings(mol)) {
   if (!bond || bond.order !== 2 || mol.atoms[bond.i]?.el !== 'C' || mol.atoms[bond.j]?.el !== 'C') return null;
   // 8원 미만 고리 안의 C=C(벤젠 케쿨레 구조, 사이클로헥센)는 기하가 고정돼 E/Z를 쓰지 않는다.
-  if (findRings(mol).some((ring) => ring.length < 8 && ring.includes(bond.i) && ring.includes(bond.j))) return null;
+  if (rings.some((ring) => ring.length < 8 && ring.includes(bond.i) && ring.includes(bond.j))) return null;
   const leftBranches = neighbors(mol, bond.i).filter((index) => index !== bond.j);
   const rightBranches = neighbors(mol, bond.j).filter((index) => index !== bond.i);
   if (!leftBranches.length || !rightBranches.length) return null;
@@ -147,7 +171,7 @@ export function assignEZ(mol, bond) {
 export function stereochemicalAssignments(mol) {
   return {
     rs: mol.atoms.map((_, index) => assignRS(mol, index)).filter(Boolean),
-    ez: mol.bonds.map((bond) => assignEZ(mol, bond)).filter(Boolean),
+    ez: (() => { const rings = findRings(mol); return mol.bonds.map((bond) => assignEZ(mol, bond, rings)).filter(Boolean); })(),
   };
 }
 

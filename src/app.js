@@ -1,7 +1,7 @@
 import { toXYZ, toMolBlock, toPDB, encodeState, decodeState, encodeStateAsync, decodeStateAsync } from './io.js';
 import { energy, minimize, typeAtom, cachedTerms } from './uff.js';
 import {
-  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize, atomCharge,
+  neighbors, bondOrderSum, measure, addAtom, addBond, removeAtom, branchAtoms, setDihedral, duplicateAtoms, isTorsionChain, pruneAtom, aromatize, atomCharge, findRings,
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
@@ -910,15 +910,16 @@ function duplicateSelection() {
 // 한 개씩 조립하는 도중 "직선형/평면 삼각형 완성"이 매번 오탐으로 울리는 원인이었다.
 function checkSnaps() {
   const next = {};
+  const rings = findRings(state.mol);
   for (let i = 0; i < state.mol.atoms.length; i++) {
     const nb = neighbors(state.mol, i).length;
     const max = MAX_VALENCE[state.mol.atoms[i].el];
     // 이웃 수가 아니라 결합차수 합으로 "원자가를 다 썼는지"를 본다 — 이웃 수로 세면
     // 에틸렌 탄소(이웃 3개, 원자가 4)가 영원히 미완성으로 남아 완성 연출이 안 떴다.
-    if (nb >= 2 && max !== undefined && bondOrderSum(state.mol, i) >= max) next[i] = vseprCheck(state.mol, i).satisfied;
+    if (nb >= 2 && max !== undefined && bondOrderSum(state.mol, i) >= max) next[i] = vseprCheck(state.mol, i, undefined, rings).satisfied;
   }
   for (const idx of newSnapEvents(state.snapState, next)) {
-    const v = vseprCheck(state.mol, Number(idx));
+    const v = vseprCheck(state.mol, Number(idx), undefined, rings);
     playClick(1320); // 성공은 높은 음
     toast(`${state.mol.atoms[idx].el}${idx}: ${geometryName(state.mol, Number(idx))} 완성 (${v.ideal}°)`);
   }

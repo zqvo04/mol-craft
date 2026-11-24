@@ -240,3 +240,17 @@ test('CIP R/S·E/Z가 PubChem 3D 구조에서 RDKit 기준 라벨과 일치한�
     assert.deepEqual(Object.fromEntries(got.ez.map((x) => [`${Math.min(...x.bond)}-${Math.max(...x.bond)}`, x.configuration])), want.ez, `${name} E/Z`);
   }
 });
+
+test('CIP 판정은 끝까지 동률인 케이지 분자(도데카헤드레인)에서도 빠르게 끝난다 (지수 시간 회귀)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { parseSdf } = await import('../src/catalog.js');
+  const { stereochemicalAssignments: assign } = await import('../src/learning.js');
+  const s = parseSdf(readFileSync(new URL('./fixtures/dodecahedrane-pubchem3d.sdf', import.meta.url), 'utf8'));
+  const m = createMolecule();
+  s.atoms.forEach((a) => addAtom(m, a.el, a.pos));
+  s.bonds.forEach((b) => addBond(m, b.i, b.j, b.order));
+  const started = performance.now();
+  const result = assign(m);
+  assert.ok(performance.now() - started < 5000, '예전 구현은 약 60초 걸렸다');
+  assert.deepEqual(result.rs, [], '완전 대칭 케이지에는 입체중심이 없다');
+});
