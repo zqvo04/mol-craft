@@ -20,6 +20,10 @@
   (() => {
     const saved = localStorage.getItem('mol-craft-theme');
     if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+    // 학습 단계: 처음 온 사용자는 기초 모드(고교 화학 수준)로 시작한다.
+    let level = null;
+    try { level = localStorage.getItem('mol-craft-level'); } catch {}
+    document.documentElement.dataset.level = level === 'advanced' ? 'advanced' : 'basic';
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/3dmol@3.0.0/build/3Dmol-min.js" integrity="sha384-im1q6KeE/I9CzisqKyDaaKEOraUbZkj2RCRtmq8lpMuZJTjPhLB1xXd8ZzMhxX3R" crossorigin="anonymous"></script>
@@ -178,6 +182,10 @@
   }
   /* 라이트/다크 전환 — 상단 우측 모서리의 원형 아이콘 버튼. 두 아이콘을
      겹쳐 두고 opacity+rotate로 크로스페이드한다(레이아웃 흔들림 없이). */
+  /* 기초 모드: 고교 수준을 넘는 정량·분광·배좌 도구를 숨긴다. 입체화학·결합 기하는 두 모드 공통. */
+  :root[data-level="basic"] [data-advanced],
+  :root[data-level="basic"] .dropdown:has(> [data-advanced]) { display: none !important; }
+  #level-toggle[aria-pressed="true"] { color: var(--primary); }
   #theme-toggle {
     position: relative;
     flex-shrink: 0;
@@ -589,7 +597,8 @@
       min-height: 54px; padding: 8px 10px; border-radius: 18px;
       flex-wrap: nowrap; gap: 8px;
     }
-    header > :not(strong):not(#theme-toggle):not(#mobile-more):not(#mobile-status) { display: none; }
+    header > :not(strong):not(#theme-toggle):not(#mobile-more):not(#mobile-status):not(#level-toggle) { display: none; }
+    #level-toggle { min-height: 44px; padding: 0 12px; flex-shrink: 0; font-size: 12px; }
     header strong { min-width: 0; margin-right: 0; font-size: 15px; white-space: nowrap; }
     #mobile-status { display: inline-flex; min-width: 0; flex: 1; color: var(--muted-fg); font: 600 10px/1.2 var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #mobile-more { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; font-size: 18px; }
@@ -678,18 +687,19 @@
   <strong>mol-craft</strong>
   <span id="mobile-status" role="status" aria-live="polite">온라인 · 이 기기에 저장됨</span>
   <select id="preset"></select>
-  <select id="colorby" title="원자 색을 무엇으로 칠할지">
+  <button id="level-toggle" type="button" aria-pressed="false" title="심화 분석 도구(에너지·분광학·배좌 등) 표시 전환">기초 모드</button>
+  <select id="colorby" data-advanced title="원자 색을 무엇으로 칠할지">
     <option value="element">원소 색</option>
     <option value="strain">응력 히트맵</option>
   </select>
   <button id="minimize">구조 최적화</button>
-  <button id="export-xyz">XYZ</button>
-  <button id="export-mol">MOL</button>
-  <button id="export-pdb">PDB</button>
+  <button id="export-xyz" data-advanced>XYZ</button>
+  <button id="export-mol" data-advanced>MOL</button>
+  <button id="export-pdb" data-advanced>PDB</button>
   <button id="share">링크 복사</button>
-  <button id="share-short">단축 링크</button>
+  <button id="share-short" data-advanced>단축 링크</button>
   <button id="catalog-open" class="catalog-open">분자 카탈로그 <span id="catalog-compare-count">0</span></button>
-  <span id="disclaimer">UFF 역장 · 진공 · 정전기 에너지항 제외 · 정성 비교용(양자계산 대체 아님)</span>
+  <span id="disclaimer" data-advanced>UFF 역장 · 진공 · 정전기 에너지항 제외 · 정성 비교용(양자계산 대체 아님)</span>
   <button id="mobile-more" type="button" aria-label="추가 도구 열기" aria-haspopup="dialog" aria-controls="mobile-more-sheet" aria-expanded="false">⋯</button>
   <button id="theme-toggle" title="다크모드 전환" aria-pressed="false">
     <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
@@ -752,16 +762,16 @@
     <button data-inspector-tab="learning" role="tab" aria-selected="false">학습 노트</button>
   </div>
   <div id="analysis-panel" class="inspector-panel">
-  <section><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>
-  <section><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
+  <section data-advanced><h2>총 에너지</h2><div id="total">—</div><div id="warn"></div></section>
+  <section data-advanced><h2>항별 분해 (kcal/mol)</h2><div id="breakdown"></div></section>
   <section><h2>선택 측정</h2><div id="measure">원자를 2~4개 클릭</div></section>
-  <section><h2>이면각 회전</h2>
+  <section data-advanced><h2>이면각 회전</h2>
     <input id="dihedral" type="range" min="-180" max="180" value="0" style="width:100%" disabled>
     <div id="dihedral-info" style="font-size:12px">원자 4개를 순서대로 선택하면 활성화됩니다</div>
     <button id="torsion-scan" class="torsion-scan" disabled>비틀림 스캔</button>
     <div id="torsion-scan-result" class="torsion-scan-result"><span class="learning-muted">회전 가능한 결합을 고르면 에너지 표본을 비교할 수 있습니다.</span></div>
   </section>
-  <section><h2>최적화 리플레이</h2>
+  <section data-advanced><h2>최적화 리플레이</h2>
     <input id="replay" type="range" min="0" max="0" value="0" style="width:100%" disabled>
     <div id="replay-info" style="font-size:12px">구조 최적화를 실행하면 활성화됩니다</div>
   </section>
@@ -772,12 +782,12 @@
     <section><h2>구조 역검증</h2><div id="learning-validation"></div></section>
     <section><h2>입체화학</h2><div id="learning-stereo"></div></section>
     <section><h2>결합 기하</h2><div id="learning-geometry"></div></section>
-    <section><h2>배좌와 스트레인</h2><div id="learning-conformation"></div></section>
-    <section><h2>생체유기 실험</h2><div id="learning-bioorganic"></div></section>
+    <section data-advanced><h2>배좌와 스트레인</h2><div id="learning-conformation"></div></section>
+    <section data-advanced><h2>생체유기 실험</h2><div id="learning-bioorganic"></div></section>
     <section><h2>기능기 힌트</h2><div id="learning-groups"></div></section>
-    <section><h2>규칙 기반 분광학</h2><div id="learning-spectroscopy"></div></section>
-    <section><h2>입체장애 단서</h2><div id="learning-contacts"></div></section>
-    <section><h2>비틀림 학습</h2><div id="torsion-study"></div></section>
+    <section data-advanced><h2>규칙 기반 분광학</h2><div id="learning-spectroscopy"></div></section>
+    <section data-advanced><h2>입체장애 단서</h2><div id="learning-contacts"></div></section>
+    <section data-advanced><h2>비틀림 학습</h2><div id="torsion-study"></div></section>
     <section class="model-limit"><h2>계산 모델의 경계</h2><p>표시는 UFF 기반의 기하·상대 에너지·비결합 접촉을 학습용으로 해석합니다. 용매 효과, 전자 비편재화, 반응 경로, 수율과 정량 활성화 장벽은 직접 예측하지 않습니다.</p></section>
   </div>
 </aside>
@@ -789,7 +799,7 @@
     <button data-mobile-action="learning" type="button">학습 노트</button>
     <button data-mobile-action="analysis" type="button">상세 분석</button>
     <button data-mobile-action="share" type="button">링크 복사</button>
-    <button data-mobile-action="export-mol" type="button">MOL 내보내기</button>
+    <button data-mobile-action="export-mol" type="button" data-advanced>MOL 내보내기</button>
   </div>
 </section>
 <dialog id="catalog-dialog" aria-labelledby="catalog-title">

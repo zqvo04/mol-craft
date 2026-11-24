@@ -1980,6 +1980,28 @@ $('colorby').onchange = (ev) => {
 document.body.dataset.colorby = state.colorBy;
 createMenuSelect($('colorby'));
 
+// 기초/심화 모드. 표시 전환은 index.html의 [data-advanced] CSS가 하고, 여기서는 상태만 바꾼다.
+function applyLevel(level) {
+  const advanced = level === 'advanced';
+  document.documentElement.dataset.level = advanced ? 'advanced' : 'basic';
+  $('level-toggle').setAttribute('aria-pressed', String(advanced));
+  $('level-toggle').textContent = advanced ? '심화 모드' : '기초 모드';
+  // 기초 모드의 분석 탭은 측정·VSEPR만 남으므로 학습 노트를 기본으로 연다.
+  if (!advanced) setInspectorTab('learning');
+  // 기초 모드에서는 색상 선택이 숨겨지므로, 응력 히트맵에 갇히지 않게 원소 색으로 되돌린다.
+  if (!advanced && $('colorby').value !== 'element') {
+    $('colorby').value = 'element';
+    $('colorby').dispatchEvent(new Event('change'));
+  }
+}
+applyLevel(document.documentElement.dataset.level);
+$('level-toggle').addEventListener('click', () => {
+  const next = document.documentElement.dataset.level === 'advanced' ? 'basic' : 'advanced';
+  try { localStorage.setItem('mol-craft-level', next); } catch { /* 저장 불가여도 이번 방문에는 적용 */ }
+  applyLevel(next);
+  toast(next === 'advanced' ? '심화 모드: 에너지·배좌·분광학 도구를 표시합니다' : '기초 모드: 구조·결합 기하·입체화학 중심으로 표시합니다');
+});
+
 setTool('view');
 
 $('preset').innerHTML = Object.entries(PRESETS)

@@ -83,3 +83,16 @@ test('P5 조립·선택·슬롯 편집은 스크린리더와 키보드 대체 �
   assert.match(app, /ev\.key === 'Enter' && state\.tool === 'place'/);
   assert.match(app, /button:not\(\.lonepair\)/);
 });
+
+test('기초 모드는 심화 도구만 숨기고 입체화학·결합 기하·측정은 남긴다', async () => {
+  const [html, app] = await Promise.all([source('index.html'), source('src/app.js')]);
+  assert.match(html, /id="level-toggle" type="button" aria-pressed="false"/);
+  assert.match(html, /:root\[data-level="basic"\] \[data-advanced\]/);
+  for (const heading of ['총 에너지', '항별 분해 (kcal/mol)', '규칙 기반 분광학', '배좌와 스트레인', '생체유기 실험']) {
+    assert.match(html, new RegExp(`<section data-advanced><h2>${heading.replace(/[()]/g, '\\$&')}</h2>`), `${heading}은 심화 전용이어야 한다`);
+  }
+  for (const heading of ['입체화학', '결합 기하', '선택 측정', 'VSEPR 상태', '현재 구조']) {
+    assert.match(html, new RegExp(`<section><h2>${heading}</h2>`), `${heading}은 기초 모드에도 보여야 한다`);
+  }
+  assert.match(app, /localStorage\.setItem\('mol-craft-level'/);
+});
