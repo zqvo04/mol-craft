@@ -18,6 +18,7 @@ const headers = () => ({
   'Content-Type': 'application/json',
 });
 
+// 공개 갤러리 목록은 제거했다: 익명 삽입 제목이 검수 없이 학생에게 노출되는 경로였다.
 // 공유 계층의 모든 함수는 예외를 밖으로 던지지 않는다.
 // 네트워크 없음 / 프로젝트 일시정지 / 키 미설정은 전부 정상적인 폴백 상황이다.
 export async function putShared(payload, title = '', { fetchImpl = fetch } = {}) {
@@ -44,15 +45,4 @@ export async function getShared(id, { fetchImpl = fetch } = {}) {
     const rows = await res.json();
     return rows[0] ?? null;
   } catch { return null; }
-}
-
-export async function listGallery(limit = 20, { fetchImpl = fetch } = {}) {
-  if (!isShareEnabled()) return [];
-  try {
-    const res = await fetchImpl(
-      `${SUPABASE.url}/rest/v1/${TABLE}?select=id,title,created_at&order=created_at.desc&limit=${limit}`,
-      { headers: headers() },
-    );
-    return res.ok ? await res.json() : [];
-  } catch { return []; }
 }

@@ -188,3 +188,32 @@ test('AMP monophosphate keeps an adenine lesson tag and phosphate formal charge'
   assert.equal(formalChargeSummary(amp).total, -2);
   assert.equal(formalChargeSummary(amp).ions.filter((ion) => ion.el === 'O').length, 2);
 });
+
+test('1H NMR: non-equivalent neighbour sets report the n+1 label first, with the exact combination as secondary text', () => {
+  const nmr = protonNmrSignals(loadPreset('butane'));
+  const ch2 = nmr.signals.find((signal) => signal.integral === 4);
+  const ch3 = nmr.signals.find((signal) => signal.integral === 6);
+  assert.match(ch2.multiplicity, /^육중선\(sextet, n\+1 근사\) · 정확히는 t×q/);
+  assert.doesNotMatch(ch2.multiplicity, /dd/);
+  assert.equal(ch3.multiplicity, 't');
+});
+
+test('1H NMR: propane CH2 (six equivalent neighbours) is a septet', () => {
+  const m = createMolecule();
+  const c = [[-1.3, 0, 0], [0, 0.5, 0], [1.3, 0, 0]].map((pos) => addAtom(m, 'C', pos));
+  addBond(m, c[0], c[1]); addBond(m, c[1], c[2]);
+  [[-1.7, 1, 0], [-1.7, -0.5, 0.9], [-1.7, -0.5, -0.9]].forEach((pos) => addBond(m, c[0], addAtom(m, 'H', pos)));
+  [[1.7, 1, 0], [1.7, -0.5, 0.9], [1.7, -0.5, -0.9]].forEach((pos) => addBond(m, c[2], addAtom(m, 'H', pos)));
+  [[0, 1.1, 0.9], [0, 1.1, -0.9]].forEach((pos) => addBond(m, c[1], addAtom(m, 'H', pos)));
+  assert.equal(protonNmrSignals(m).signals.find((signal) => signal.integral === 2).multiplicity, 'sept');
+});
+
+test('1H NMR: a CH between two different single-H neighbours is dd', () => {
+  const m = createMolecule();
+  const [c0, c1, c2] = [[-1.3, 0, 0], [0, 0.5, 0], [1.3, 0, 0]].map((pos) => addAtom(m, 'C', pos));
+  addBond(m, c0, c1); addBond(m, c1, c2);
+  for (const [c, x] of [[c0, 'Cl'], [c0, 'Cl'], [c1, 'Br'], [c2, 'F'], [c2, 'F']]) addBond(m, c, addAtom(m, x, [0, 0, 0]));
+  for (const c of [c0, c1, c2]) addBond(m, c, addAtom(m, 'H', [0, 0, 0]));
+  const mults = protonNmrSignals(m).signals.map((signal) => signal.multiplicity);
+  assert.ok(mults.some((x) => x.startsWith('dd')), mults.join('|'));
+});

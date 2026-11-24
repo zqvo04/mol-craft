@@ -277,7 +277,8 @@ function morganLabels(mol, rounds = 5) {
   return labels;
 }
 
-const multiplicityName = (count) => ({ 0: 's', 1: 'd', 2: 't', 3: 'q', 4: 'quint', 5: 'sext', 6: 'sept' }[count] ?? `${count + 1}중선`);
+const multiplicityName = (count) => ({ 0: 's', 1: 'd', 2: 't', 3: 'q', 4: 'quint', 5: 'sext', 6: 'sept' }[count] ?? '다중선 m');
+const KOREAN_MULTIPLET = { 2: ['이중선', 'doublet'], 3: ['삼중선', 'triplet'], 4: ['사중선', 'quartet'], 5: ['오중선', 'quintet'], 6: ['육중선', 'sextet'], 7: ['칠중선', 'septet'] };
 
 export function protonNmrSignals(mol) {
   const hydrogens = mol.atoms.map((atom, index) => atom.el === 'H' ? index : -1).filter((index) => index >= 0);
@@ -301,8 +302,16 @@ export function protonNmrSignals(mol) {
       }
     }
     const counts = [...couplingSets.values()].sort((a, b) => a - b);
-    const multiplicity = !counts.length ? 's' : counts.length === 1 ? multiplicityName(counts[0]) : `복합 (${counts.map(multiplicityName).join(' × ')}; dd/ddd 가능)`;
-    return { id: index + 1, hydrogens: members, integral: members.length, multiplicity, reason: counts.length <= 1 ? 'n+1 규칙은 화학적으로 등가인 이웃 H에만 적용합니다.' : '서로 비등가인 이웃 H 집합이 있어 단순 n+1로 축약하지 않습니다.' };
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    const exact = counts.map(multiplicityName).join('×');
+    // 이웃 집합이 각각 H 1개씩이면(비닐형) dd/ddd가 정확한 교육 답이고, 그 외에는 n+1 근사를 먼저 제시한다.
+    const singles = counts.length > 1 && counts.every((n) => n === 1);
+    const named = KOREAN_MULTIPLET[total + 1];
+    const multiplicity = !counts.length ? 's' : counts.length === 1 ? multiplicityName(counts[0])
+      : singles && counts.length <= 3 ? `${'d'.repeat(counts.length)} (J가 서로 다름)`
+        : named ? `${named[0]}(${named[1]}, n+1 근사) · 정확히는 ${exact}, J가 비슷할 때 ${named[0]}으로 보임`
+          : `다중선 m · 정확히는 ${exact}`;
+    return { id: index + 1, hydrogens: members, integral: members.length, multiplicity, reason: counts.length <= 1 ? 'n+1 규칙은 화학적으로 등가인 이웃 H에만 적용합니다.' : singles ? '이웃 H가 각각 비등가인 단일 H이므로 J값이 달라 dd/ddd로 갈라집니다.' : '서로 비등가인 이웃 H 집합이 있어 n+1(전체 이웃 H 수 + 1)을 근사 라벨로 쓰고, 정확한 조합은 함께 표시합니다.' };
   });
   return { supported: true, signals, note: '신호군은 Morgan 대칭성 근사입니다. 실제 화학적 이동·J값·2차 효과는 계산하지 않습니다.' };
 }

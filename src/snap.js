@@ -408,6 +408,22 @@ export function formula(mol) {
   return order.filter((e) => counts[e]).map((e) => e + (counts[e] > 1 ? counts[e] : '')).join('');
 }
 
+// 말단 H를 다른 원소로 바꾸고 그 원자만 H로 채운다(메탄의 H 클릭 → 에탄). 포화된 시작
+// 구조에서는 붙일 자리가 없어 첫 조립이 막히던 문제를 푼다. 바꿀 수 없으면 false.
+export function substituteHydrogen(mol, h, el) {
+  const nb = neighbors(mol, h);
+  if (mol.atoms[h]?.el !== 'H' || nb.length !== 1 || el === 'H' || MAX_VALENCE[el] === undefined) return false;
+  const parent = mol.atoms[nb[0]].pos;
+  mol.atoms[h].el = el;
+  const dir = unit(sub(mol.atoms[h].pos, parent));
+  mol.atoms[h].pos = add(parent, scale(dir, bondLength(typeAtom(mol, nb[0]), typeAtom(mol, h), 1)));
+  for (let deficit = implicitH(mol, h); deficit > 0; deficit--) {
+    const idx = addAtom(mol, 'H', add(mol.atoms[h].pos, scale(idealDirection(mol, h), bondLength(typeAtom(mol, h), 'H_', 1))));
+    addBond(mol, h, idx, 1);
+  }
+  return true;
+}
+
 // 골격식 규칙 3(해석): 무거운 원자마다 부족한 H를 실제 원자로 채우고, 원자가를 넘겨
 // 붙어있는 H는 뗀다. 2D에서 탄소 골격만 그려도(사용자가 H를 신경 쓸 필요 없이) 이 함수
 // 한 번으로 3D 최적화가 가능한 완전한 분자가 된다 — 2D/3D 사이에 별도 좌표 변환은 없다.

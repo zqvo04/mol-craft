@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newShareId, putShared, getShared, listGallery } from '../src/share.js';
+import { newShareId, putShared, getShared } from '../src/share.js';
 
 const okFetch = (body, status = 200) => async () => ({
   ok: status < 400, status,
@@ -32,9 +32,4 @@ test('getShared가 행을 반환하고, 없으면 null', async () => {
     { payload: 'zX', title: 't' },
   );
   assert.equal(await getShared('abcdefghij', { fetchImpl: okFetch([]) }), null);
-});
-
-test('listGallery가 실패 시 빈 배열을 반환한다', async () => {
-  const boom = async () => { throw new Error('offline'); };
-  assert.deepEqual(await listGallery(20, { fetchImpl: boom }), []);
 });

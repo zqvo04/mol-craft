@@ -495,3 +495,17 @@ test('stability: PubChem 실측 3D 구조(카페인·아스피린·글루코스)
     assert.deepEqual(stability(m).issues, [], `${name}에 오탐 경고가 있다`);
   }
 });
+
+test('substituteHydrogen: 메탄의 H를 C로 바꾸면 완결된 에탄이 된다', async () => {
+  const { substituteHydrogen } = await import('../src/snap.js');
+  const { minimize } = await import('../src/uff.js');
+  const m = loadPreset('methane');
+  assert.equal(substituteHydrogen(m, 1, 'C'), true);
+  assert.equal(formula(m), 'C2H6');
+  minimize(m);
+  assert.deepEqual(stability(m).issues, []);
+  assert.equal(substituteHydrogen(m, 0, 'O'), false, '말단 H가 아니면 거부');
+  const o = loadPreset('methane');
+  substituteHydrogen(o, 2, 'O');
+  assert.equal(formula(o), 'CH4O', '메탄올: 산소에는 H 하나만 채운다');
+});

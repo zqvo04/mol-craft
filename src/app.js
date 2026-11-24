@@ -5,12 +5,12 @@ import {
 } from './model.js';
 import {
   canBond, vseprCheck, newSnapEvents, idealDirection, openSlots, stability, hudSummary, syncHydrogens,
-  geometryName, bondDistanceOk, cycleBondOrder, slotKinds,
+  geometryName, bondDistanceOk, cycleBondOrder, slotKinds, substituteHydrogen,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
 import { loadPreset, PRESETS, RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, validateStructureAttachment } from './presets.js';
 import { add, scale, sub, rotateAround } from './geom.js';
-import { isShareEnabled, putShared, getShared, listGallery } from './share.js';
+import { putShared, getShared } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
 import { initCatalog } from './catalog.js';
 import { amideSites, compareStructuralIsomerCandidate, electrostaticContacts, formalChargeSummary, nucleobaseLabels, peptideBackboneTorsions, predictedIrBands, protonNmrSignals, qualitativePartialCharges, scanTorsion, stereochemicalAssignments, summarizeStructure, torsionInterpretation } from './learning.js';
@@ -494,7 +494,7 @@ function updateLearningPanel() {
     ? `<article class="learning-card"><b>예상 IR 작용기 밴드</b><p>${ir.map((band) => `${band.label} <b>${band.range}</b> (${band.character})`).join('<br>')}</p><p>규칙 기반 판독 연습이며, 실제 진동수·스펙트럼 세기는 계산하지 않습니다.</p></article>`
     : '<article class="learning-card"><b>예상 IR 작용기 밴드</b><p>현재 구조에서 C=O, O–H, N–H, C≡N, C=C 진단 밴드를 찾지 못했습니다.</p></article>';
   const nmrCard = nmr.supported
-    ? `<article class="learning-card"><b>¹H NMR 신호군 · 적분비</b><p>${nmr.signals.map((signal) => `신호 ${signal.id}: ${signal.integral}H · <b>${signal.multiplicity}</b>`).join('<br>')}</p><p>${nmr.note} n+1은 등가 이웃 H에만 적용하며, 비등가 집합은 dd·ddd처럼 복합으로 표시합니다.</p></article>`
+    ? `<article class="learning-card"><b>¹H NMR 신호군 · 적분비</b><p>${nmr.signals.map((signal) => `신호 ${signal.id}: ${signal.integral}H · <b>${signal.multiplicity}</b>`).join('<br>')}</p><p>${nmr.note} 이웃 H 집합이 여럿이면 J가 비슷하다고 보고 n+1 근사로 표시하고, 서로 다른 H 하나씩과 짝지으면 dd·ddd로 표시합니다. cis/trans 비닐 H처럼 부분입체 위치(diastereotopic) H는 아직 구분하지 않습니다.</p></article>`
     : `<article class="learning-card"><b>¹H NMR 신호군</b><p>${nmr.note}</p></article>`;
   $('learning-spectroscopy').innerHTML = isEducationalSketch
     ? '<article class="learning-card limit"><b>분광학 적용 범위</b><p>AMP 교육용 골격은 명시적 수소와 완결된 결합차수를 제공하지 않으므로 IR·¹H NMR 예측을 표시하지 않습니다.</p></article>'
@@ -846,6 +846,21 @@ function attachAtom(anchor, { dir } = {}) {
   signalViewer('success');
 }
 
+// 포화된 구조(기본 메탄)에서도 조립을 시작할 수 있게, 말단 H를 클릭하면 현재 원소로 바꾼다.
+const canSubstitute = (i) => state.mol.atoms[i]?.el === 'H' && state.element !== 'H'
+  && neighbors(state.mol, i).length === 1 && MAX_VALENCE[state.element] !== undefined;
+function substituteAtom(h) {
+  pushUndo();
+  substituteHydrogen(state.mol, h, state.element);
+  state.selection = [];
+  state.snapState = {};
+  state.ghost = null;
+  playClick(880);
+  toast(`H → ${state.element} 치환 (빈 자리는 H로 채움)`, 'ok');
+  render();
+  signalViewer('success');
+}
+
 // 원자 하나를 뗀다(지우개 도구). 원자가 하나뿐이면 남길 것이 없으니 막는다.
 // 원자 하나를 뗀다(지우개 도구·우클릭). 떨어져 나가는 작은 조각은 함께 지운다
 // (model.pruneAtom) — 사슬 중간을 자를 때마다 남은 파편을 하나씩 다시 지우던 불편을 없앤다.
@@ -965,10 +980,6 @@ $('share').onclick = async () => {
   toast('링크 복사됨');
 };
 
-// 갤러리 제목은 익명 사용자 입력이다. innerHTML에 넣기 전 반드시 이스케이프한다.
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
 // 단축 링크: 실패하면 해시 링크로 조용히 폴백한다. 사용자는 어쨌든 링크를 얻는다.
 $('share-short').onclick = async () => {
   const payload = await encodeStateAsync(state.mol);
@@ -981,15 +992,6 @@ $('share-short').onclick = async () => {
   toast(id ? '단축 링크 복사됨' : '서버 응답 없음 — 전체 링크로 복사됨', id ? 'ok' : 'err');
 };
 
-// 갤러리는 공유가 켜져 있을 때만 노출한다.
-if (isShareEnabled()) {
-  $('gallery-section').hidden = false;
-  listGallery(20).then((rows) => {
-    $('gallery').innerHTML = rows.length
-      ? rows.map((r) => `<div><a href="#g=${r.id}">${escapeHtml(r.title) || r.id}</a></div>`).join('')
-      : '아직 공유된 구조가 없습니다';
-  });
-}
 
 // ---- 도구 배선 -----------------------------------------------------------
 // 클릭 동작은 이제 모드(학습/연구)가 아니라 도구(선택/붙이기/지우개)가 결정한다.
@@ -1046,7 +1048,7 @@ function setTool(tool) {
 const TOOL_HINT = {
   view: '<b>탐색</b> — 드래그·휠로 분자를 관찰합니다. 구조는 바뀌지 않습니다.',
   select: '<b>선택</b> — 원자·결합을 고른 뒤 위 선택 바에서 전하·결합·복제·삭제를 편집합니다. 빈 곳 드래그로 여러 원자를 고를 수 있습니다.',
-  place: '<b>조립</b> — 앵커 원자를 조준하면 가능한 자리가 나타납니다. 초록 고스트를 클릭해 <b>' + state.element + '</b>(을)를 붙이세요.',
+  place: '<b>조립</b> — 앵커 원자를 조준하면 가능한 자리가 나타납니다. 초록 고스트를 클릭해 <b>' + state.element + '</b>(을)를 붙이세요. 말단 H(하늘색)를 클릭하면 그 H를 <b>' + state.element + '</b>(으)로 치환합니다.',
   ring: '<b>구조 단위</b> — 앵커를 조준해 전체 미리보기를 보고 클릭합니다. <b>R</b> 키 또는 회전 버튼으로 배치를 바꿉니다.',
 };
 
@@ -1207,6 +1209,7 @@ function drawGhost() {
   const g = state.ghost;
   const a = state.mol.atoms[g.anchor].pos;
   const color = g.kinds[g.slot] === 'lonepair' ? '#a855f7'
+    : g.reason === 'substitute' ? '#0ea5e9'
     : !g.ok ? '#dc2626' : g.reason === 'ok' ? '#22c55e' : '#f59e0b';
   const opacity = blinkOn ? 0.6 : 0.22;
   ghostShapes = [
@@ -1283,6 +1286,9 @@ function previewAttach(anchor, el) {
   const idx = addAtom(state.mol, el, add(a, scale(slots[slot], 2.5)));
   const check = canBond(state.mol, anchor, idx);
   state.mol.atoms.pop();
+  if (!check.ok && canSubstitute(anchor)) {
+    return { anchor, slots, slot, kinds: kinds.map((k) => k.kind), pos: a, ok: false, reason: 'substitute', el };
+  }
   const len = check.ok ? check.targetLength : 1.6;
   return {
     anchor, slots, slot, kinds: kinds.map((k) => k.kind),
@@ -1636,6 +1642,7 @@ viewerEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
     if (!state.ghost) return;
     if (state.ghost.ok) attachAtom(state.ghost.anchor, { dir: state.ghost.slots[state.ghost.slot] });
+    else if (state.ghost.reason === 'substitute') substituteAtom(state.ghost.anchor);
     else if (state.ghost.kinds[state.ghost.slot] === 'lonepair') {
       toast('비공유 전자쌍 자리입니다 — 원자가 들어갈 수 없습니다', 'err');
       signalViewer('error');
@@ -1792,6 +1799,7 @@ sketch2dEl.addEventListener('click', (ev) => {
   if (state.tool === 'place') {
     if (!ghost2d) return;
     if (ghost2d.ok) attachAtom2D(idx);
+    else if (canSubstitute(idx)) substituteAtom(idx);
     else toast(REASON_MSG[ghost2d.reason] ?? '결합할 수 없습니다', 'err');
     ghost2d = null;
     return;

@@ -124,3 +124,14 @@ test('AMP는 전하를 보존하는 비-UFF 교육용 골격으로 명시된다'
   assert.equal(amp.educationalSketch, true);
   assert.equal(amp.atoms.filter((atom) => atom.charge === -1).length, 2);
 });
+
+test('glycine_tripeptide is a fully hydrogenated neutral Gly-Gly-Gly with no valence warnings after minimize', async () => {
+  const { minimize } = await import('../src/uff.js');
+  const { stability } = await import('../src/snap.js');
+  const m = loadPreset('glycine_tripeptide');
+  assert.equal(m.atoms.filter((a) => a.el === 'H').length, 11);
+  minimize(m);
+  const s = stability(m);
+  assert.ok(!s.issues.some((i) => i.msg.includes('원자가 부족')), JSON.stringify(s.issues));
+  assert.ok(s.score >= 88, `score ${s.score}`);
+});

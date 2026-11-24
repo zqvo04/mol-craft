@@ -2,6 +2,7 @@ import { createMolecule, addAtom, addBond, bondOrderSum } from './model.js';
 import { sub, add, scale, cross, dot, unit, rotateAround } from './geom.js';
 import { typeAtom, bondLength } from './uff.js';
 import { MAX_VALENCE } from './params.js';
+import { syncHydrogens } from './snap.js';
 
 const T = 0.63; // 정사면체 시작 좌표용 상수
 
@@ -104,14 +105,15 @@ export const PRESETS = {
     note: '의자보다 높은 에너지',
   },
   glycine_tripeptide: {
-    name: '글리신 트라이펩타이드 골격',
+    name: 'Gly-Gly-Gly 트라이펩타이드',
+    addHydrogens: true, // 중원자 12개만 두고 loadPreset이 syncHydrogens로 H₂N–CH₂–CO–NH–CH₂–CO–NH–CH₂–COOH의 H를 채운다
     atoms: [
       ['N', [0.0, 1.0, 0.0]], ['C', [1.1, 0.1, 0.0]], ['C', [2.4, 0.7, 0.2]], ['O', [3.4, 0.1, 0.2]],
       ['N', [2.3, 2.0, 0.0]], ['C', [3.5, 2.8, -0.5]], ['C', [4.8, 2.0, 0.1]], ['O', [5.9, 2.5, 0.1]],
       ['N', [4.7, 0.7, -0.1]], ['C', [5.9, -0.2, 0.5]], ['C', [7.2, 0.6, -0.2]], ['O', [8.3, 0.1, -0.2]],
     ],
     bonds: [[0, 1], [1, 2], [2, 3, 2], [2, 4], [4, 5], [5, 6], [6, 7, 2], [6, 8], [8, 9], [9, 10], [10, 11, 2]],
-    note: '중앙 글리신의 φ/ψ와 라마찬드란형 좌표를 관찰하는 중성 골격 모식도 · 실제 쯔비터이온/수소결합은 미표현',
+    note: '중앙 글리신의 φ/ψ와 라마찬드란형 좌표를 관찰하는 중성 Gly-Gly-Gly(전체 H 명시) · 실제 쯔비터이온/수소결합은 미표현',
   },
   glycine_zwitterion: {
     name: '글리신 쯔비터이온',
@@ -144,6 +146,7 @@ export function loadPreset(key) {
     if (nucleobase) m.atoms[index].nucleobase = nucleobase;
   }
   for (const [i, j, order] of p.bonds) addBond(m, i, j, order ?? 1);
+  if (p.addHydrogens) syncHydrogens(m);
   return m;
 }
 
