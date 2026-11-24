@@ -23,48 +23,68 @@ function otherEnd(bond, index) {
   return bond.i === index ? bond.j : bond.i;
 }
 
-// CIP 비교의 교육용 그래프 전개다. 각 껍질에서 원자번호를 내림차순으로 비교하고,
-// 이중·삼중 결합은 복제 원자(각각 2·3개)로 처리한다. 고리·동위원소·전하의 완전한
-// IUPAC 구현은 아니므로 결과가 동률이면 "판정 보류"로 남긴다.
-function cipLayers(mol, center, root, maxDepth = 8) {
-  const layers = [[atomicNumber(mol.atoms[root])]];
-  let frontier = [{ atom: root, previous: center, visited: new Set([center, root]) }];
-  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
-    const next = [];
-    const layer = [];
-    for (const node of frontier) {
-      for (const bond of incidentBonds(mol, node.atom)) {
-        const neighbour = otherEnd(bond, node.atom);
-        if (neighbour === node.previous) continue;
-        const copies = Math.max(1, Math.round(bond.order));
-        for (let copy = 0; copy < copies; copy++) layer.push(atomicNumber(mol.atoms[neighbour]));
-        if (!node.visited.has(neighbour)) {
-          const visited = new Set(node.visited);
-          visited.add(neighbour);
-          next.push({ atom: neighbour, previous: node.atom, visited });
-        }
-      }
-    }
-    layers.push(layer.sort((a, b) => b - a));
-    frontier = next;
+// CIP 규칙 1a의 계층적 디그래프 비교. 구(sphere)를 통째로 펼쳐 비교하면(예전 구현)
+// 우선순위가 높은 가지부터 비교해야 하는 규칙이 깨져, 당의 아노머 탄소(O 두 개)처럼
+// 첫 구가 같은 경우 R/S가 뒤집혔다. 다중결합·고리 닫힘은 복제 원자(자식 없음)로 처리한다.
+// 동위원소·전하·규칙 2 이후(입체 기술자 비교)는 다루지 않으므로 끝까지 같으면 판정 보류.
+const CIP_MAX_SPHERES = 12;
+
+function cipNode(atom, parent, path, duplicate = false) {
+  return { atom, parent, path, duplicate };
+}
+
+function cipChildren(mol, node) {
+  if (node.duplicate) return [];
+  const children = [];
+  for (const bond of incidentBonds(mol, node.atom)) {
+    const neighbour = otherEnd(bond, node.atom);
+    const extra = Math.max(1, Math.round(bond.order)) - 1;
+    for (let k = 0; k < extra; k++) children.push(cipNode(neighbour, node.atom, node.path, true));
+    if (neighbour === node.parent) continue;
+    if (node.path.has(neighbour)) { children.push(cipNode(neighbour, node.atom, node.path, true)); continue; }
+    children.push(cipNode(neighbour, node.atom, new Set([...node.path, neighbour])));
   }
-  return layers;
+  return children;
+}
+
+const cipZ = (mol, node) => atomicNumber(mol.atoms[node.atom]);
+
+// 음수: a가 우선. 같은 원자번호의 자식끼리는 재귀 비교로 순서를 정한 뒤 너비 우선으로 내려간다.
+function compareCipNodes(mol, a, b, budget = CIP_MAX_SPHERES) {
+  const dz = cipZ(mol, b) - cipZ(mol, a);
+  if (dz !== 0) return dz;
+  let left = [a];
+  let right = [b];
+  for (let sphere = 0; sphere < budget && (left.length || right.length); sphere++) {
+    const nextLeft = [];
+    const nextRight = [];
+    for (let k = 0; k < Math.max(left.length, right.length); k++) {
+      const ca = left[k] ? orderedCipChildren(mol, left[k], budget - sphere - 1) : [];
+      const cb = right[k] ? orderedCipChildren(mol, right[k], budget - sphere - 1) : [];
+      for (let m = 0; m < Math.max(ca.length, cb.length); m++) {
+        const delta = (cb[m] ? cipZ(mol, cb[m]) : 0) - (ca[m] ? cipZ(mol, ca[m]) : 0);
+        if (delta !== 0) return delta;
+      }
+      nextLeft.push(...ca);
+      nextRight.push(...cb);
+    }
+    left = nextLeft;
+    right = nextRight;
+  }
+  return 0;
+}
+
+function orderedCipChildren(mol, node, budget) {
+  const children = cipChildren(mol, node);
+  return budget > 0 ? children.sort((x, y) => compareCipNodes(mol, x, y, budget)) : children.sort((x, y) => cipZ(mol, y) - cipZ(mol, x));
 }
 
 function compareCipBranches(mol, center, left, right) {
-  const a = cipLayers(mol, center, left);
-  const b = cipLayers(mol, center, right);
-  const depth = Math.max(a.length, b.length);
-  for (let d = 0; d < depth; d++) {
-    const layerA = a[d] ?? [];
-    const layerB = b[d] ?? [];
-    const length = Math.max(layerA.length, layerB.length);
-    for (let k = 0; k < length; k++) {
-      const delta = (layerA[k] ?? 0) - (layerB[k] ?? 0);
-      if (delta !== 0) return delta > 0 ? -1 : 1;
-    }
-  }
-  return 0;
+  return compareCipNodes(
+    mol,
+    cipNode(left, center, new Set([center, left])),
+    cipNode(right, center, new Set([center, right])),
+  );
 }
 
 function rankCipBranches(mol, center, branches) {
@@ -102,6 +122,8 @@ function perpendicularTo(axis, vector) {
 
 export function assignEZ(mol, bond) {
   if (!bond || bond.order !== 2 || mol.atoms[bond.i]?.el !== 'C' || mol.atoms[bond.j]?.el !== 'C') return null;
+  // 8원 미만 고리 안의 C=C(벤젠 케쿨레 구조, 사이클로헥센)는 기하가 고정돼 E/Z를 쓰지 않는다.
+  if (findRings(mol).some((ring) => ring.length < 8 && ring.includes(bond.i) && ring.includes(bond.j))) return null;
   const leftBranches = neighbors(mol, bond.i).filter((index) => index !== bond.j);
   const rightBranches = neighbors(mol, bond.j).filter((index) => index !== bond.i);
   if (!leftBranches.length || !rightBranches.length) return null;

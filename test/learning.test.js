@@ -217,3 +217,26 @@ test('1H NMR: a CH between two different single-H neighbours is dd', () => {
   const mults = protonNmrSignals(m).signals.map((signal) => signal.multiplicity);
   assert.ok(mults.some((x) => x.startsWith('dd')), mults.join('|'));
 });
+
+test('CIP R/S·E/Z가 PubChem 3D 구조에서 RDKit 기준 라벨과 일치한다 (아노머 탄소·고리 C=C 회귀)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { parseSdf } = await import('../src/catalog.js');
+  const { createMolecule: create, addAtom: add, addBond: bond } = await import('../src/model.js');
+  const { stereochemicalAssignments: assign } = await import('../src/learning.js');
+  // 기대값: RDKit AssignStereochemistryFrom3D + rdCIPLabeler(새 CIP 구현)로 생성.
+  const expected = {
+    glucose: { rs: { 6: 'S', 7: 'S', 8: 'R', 9: 'R', 10: 'R' }, ez: {} },
+    sucrose: { rs: { 11: 'S', 12: 'S', 13: 'S', 14: 'R', 15: 'R', 16: 'R', 17: 'S', 18: 'S', 19: 'R' }, ez: {} },
+    morphine: { rs: { 4: 'S', 5: 'R', 6: 'R', 7: 'R', 13: 'S' }, ez: {} },
+    stilbene: { rs: {}, ez: { '2-3': 'E' } },
+  };
+  for (const [name, want] of Object.entries(expected)) {
+    const s = parseSdf(readFileSync(new URL(`./fixtures/${name}-pubchem3d.sdf`, import.meta.url), 'utf8'));
+    const m = create();
+    s.atoms.forEach((a) => add(m, a.el, a.pos));
+    s.bonds.forEach((b) => bond(m, b.i, b.j, b.order));
+    const got = assign(m);
+    assert.deepEqual(Object.fromEntries(got.rs.map((x) => [x.center, x.configuration])), want.rs, `${name} R/S`);
+    assert.deepEqual(Object.fromEntries(got.ez.map((x) => [`${Math.min(...x.bond)}-${Math.max(...x.bond)}`, x.configuration])), want.ez, `${name} E/Z`);
+  }
+});

@@ -423,9 +423,13 @@
   #tools button, #palette button, #recent-palette button, #history-controls button {
     border: none; border-radius: 10px; background: transparent; box-shadow: none;
   }
-  #undo, #redo { min-width: 36px; min-height: 36px; font-size: 18px; line-height: 1; }
-  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) #tools button.tool.active { color: var(--fg); } }
-  :root[data-theme="light"] #tools button.tool.active { color: var(--fg); }
+  /* 실행취소·재실행: ↶ ↷ 글자는 시스템 폴백 폰트에서 ink가 font-size의 절반 남짓이라
+     SVG 아이콘(20px)으로 그린다. 버튼은 40px 이상. */
+  #undo, #redo { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 0; }
+  #undo svg, #redo svg { width: 20px; height: 20px; flex: none; }
+  /* #tools button(ID 규칙)이 배경·그림자를 지우므로 ID 한 단계 더 구체적으로 되살린다. */
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) #tools button.tool.active { color: var(--fg); background: var(--surface); box-shadow: var(--shadow-sm), inset 0 1px 0 #fff, 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent); } }
+  :root[data-theme="light"] #tools button.tool.active { color: var(--fg); background: var(--surface); box-shadow: var(--shadow-sm), inset 0 1px 0 #fff, 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent); }
   #palette button, #recent-palette button { min-width: 32px; font-family: var(--font-mono); font-weight: 600; }
   #toolbar { gap: 8px; }
   #build-console, #selection-context {
@@ -631,12 +635,13 @@
     aside {
       position: fixed; z-index: var(--z-modal); top: auto; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px;
       max-height: min(74dvh, 640px); padding: 8px 16px 20px; border-radius: 24px 24px 18px 18px;
+      background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; /* 뒤의 조립 콘솔 글자가 비치지 않게 불투명 */
       transform: translateY(calc(100% + 16px)); opacity: 0; pointer-events: none;
       transition: transform .22s var(--ease-out), opacity .16s var(--ease-out);
     }
     body[data-mobile-inspector="open"] aside { transform: translateY(0); opacity: 1; pointer-events: auto; }
     aside::before { content: ''; display: block; width: 38px; height: 4px; margin: 2px auto 10px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 22%, transparent); }
-    .inspector-tabs { top: -8px; margin-inline: -16px; padding-inline: 16px; }
+    .inspector-tabs { top: -8px; margin-inline: -16px; padding-inline: 16px; background: var(--surface); }
     #mobile-more-sheet {
       position: fixed; z-index: var(--z-modal); right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px;
       padding: 14px; border: 1px solid var(--glass-border); border-radius: 24px 24px 18px 18px;
@@ -725,8 +730,8 @@
     <button id="selection-delete" title="선택 삭제 (Delete)">삭제</button>
   </div>
   <div id="history-controls" aria-label="편집 이력">
-    <button id="undo" title="실행취소 (Ctrl+Z)" aria-label="실행취소">↶</button>
-    <button id="redo" title="재실행 (Ctrl+Shift+Z)" aria-label="다시 실행" disabled>↷</button>
+    <button id="undo" title="실행취소 (Ctrl+Z)" aria-label="실행취소"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button id="redo" title="재실행 (Ctrl+Shift+Z)" aria-label="다시 실행" disabled><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
   </div>
 </div>
 <div id="toolhint"></div>
@@ -761,7 +766,6 @@
     <div id="replay-info" style="font-size:12px">구조 최적화를 실행하면 활성화됩니다</div>
   </section>
   <section><h2>VSEPR 상태</h2><div id="vsepr">—</div></section>
-  <section id="gallery-section" hidden><h2>공개 갤러리</h2><div id="gallery">불러오는 중…</div></section>
   </div>
   <div id="learning-panel" class="inspector-panel" hidden>
     <section><h2>현재 구조</h2><div id="learning-overview"></div></section>
