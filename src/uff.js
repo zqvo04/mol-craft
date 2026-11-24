@@ -19,6 +19,15 @@ function isAmideNitrogen(mol, i) {
       && mol.atoms[bond.i === carbon ? bond.j : bond.i]?.el === 'O'));
 }
 
+// 단일결합만 가진 3배위 N이 π계(다중결합을 가진 이웃)에 붙어 있으면 비공유전자쌍이
+// 비편재화되어 평면(sp²)에 가깝다 — 아마이드·피롤·이미다졸·퓨린 N9·아닐린형 N.
+// 예전엔 아마이드만 N_R로 올려, PubChem의 실제 카페인 구조가 'N 각도 편차 21°'로 오판정됐다.
+function isConjugatedNitrogen(mol, i) {
+  const nb = neighbors(mol, i);
+  if (nb.length > 3 || mol.bonds.some((b) => (b.i === i || b.j === i) && b.order > 1)) return false;
+  return isAmideNitrogen(mol, i) || nb.some((n) => mol.bonds.some((b) => (b.i === n || b.j === n) && b.order > 1));
+}
+
 export function typeAtom(mol, i) {
   const a = mol.atoms[i];
   if (a.type) return a.type;
@@ -39,7 +48,7 @@ export function typeAtom(mol, i) {
     // 아마이드 N의 비공유전자쌍은 C=O와 공명해 C–N에 부분 이중결합을 만든다.
     // 전하·공명 에너지를 계산하는 모델은 아니지만, N_R(sp²)로 승격하면 120° 기하,
     // out-of-plane 억제, sp²–sp² 비틀림 항이 함께 적용돼 평면성 데모가 가능해진다.
-    case 'N': return isAmideNitrogen(mol, i) ? 'N_R' : (maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3');
+    case 'N': return isConjugatedNitrogen(mol, i) ? 'N_R' : (maxOrder >= 3 ? 'N_1' : maxOrder === 2 ? 'N_2' : 'N_3');
     case 'O': return maxOrder >= 2 ? 'O_2' : 'O_3';
     // S/P도 C/N/O와 같은 원칙: 실제 결합차수 합(bo)이 원자가·혼성을 정하지, 이웃 개수(n)가
     // 정하지 않는다. 예전엔 n>=3이면 무조건 S_3+6(SF6급 육배위, theta0=90°)이라, 메틸 두 개

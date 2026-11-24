@@ -219,22 +219,42 @@ test('renderSVG 규칙 2.6: z가 거의 같은 결합은 평범한 <line> 그대
   assert.ok(!svg.includes('<polygon'));
 });
 
-test('renderSVG 규칙 2.6: dz가 크게 양수인 결합은 쐐기(<polygon>)로 그려진다', () => {
+function chiral(zSign = 1) {
   const m = createMolecule();
-  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, 1]);
-  addBond(m, 0, 1);
-  const svg = renderSVG(m);
-  assert.ok(svg.includes('<polygon'));
-  assert.equal((svg.match(/<line/g) || []).length, 0);
+  addAtom(m, 'C', [0, 0, 0]);
+  const v = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]];
+  for (const [el, k] of [['H', 0], ['Br', 1], ['Cl', 2], ['F', 3]]) {
+    addAtom(m, el, [v[k][0], v[k][1], v[k][2] * zSign]);
+    addBond(m, 0, m.atoms.length - 1);
+  }
+  return m;
+}
+const stereoMarks = (svg) => ({ wedge: (svg.match(/<polygon/g) || []).length, dashes: (svg.match(/<line/g) || []).length - 2 });
+
+test('renderSVG 규칙 2.6: n-부탄(입체중심 없음)은 쐐기/파선이 없다', () => {
+  const svg = renderSVG(loadPreset('butane'));
+  assert.ok(!svg.includes('<polygon'));
+  assert.equal((svg.match(/<line/g) || []).length, 3);
 });
 
-test('renderSVG 규칙 2.6: dz가 크게 음수인 결합은 파선(여러 <line>)으로 그려진다', () => {
-  const m = createMolecule();
-  addAtom(m, 'C', [0, 0, 0]); addAtom(m, 'C', [1, 0, -1]);
-  addBond(m, 0, 1);
-  const svg = renderSVG(m);
-  assert.ok(!svg.includes('<polygon'));
-  assert.equal((svg.match(/<line/g) || []).length, 5);
+test('renderSVG 규칙 2.6: 입체중심 CHBrClF는 결합 하나만 쐐기/파선, 거울상이면 뒤집힌다', () => {
+  const a = stereoMarks(renderSVG(chiral(1))), b = stereoMarks(renderSVG(chiral(-1)));
+  // 쐐기면 polygon 1개(+평범한 선 2), 파선이면 polygon 0개(+평범한 선 2 + 파선 5줄)
+  for (const x of [a, b]) assert.ok((x.wedge === 1 && x.dashes === 0) || (x.wedge === 0 && x.dashes === 5), JSON.stringify(x));
+  assert.equal(a.wedge + b.wedge, 1); // 거울상 -> 종류가 뒤집힌다
+});
+
+test('layout: n-부탄 사슬은 120° 지그재그(결합각 120°, 방향 교대)', () => {
+  const pos = layout(loadPreset('butane'));
+  const p = [0, 1, 2, 3].map((i) => pos.get(i));
+  const ang = (a, c, d) => {
+    const u = [a[0] - c[0], a[1] - c[1]], w = [d[0] - c[0], d[1] - c[1]];
+    return Math.acos((u[0] * w[0] + u[1] * w[1]) / (Math.hypot(...u) * Math.hypot(...w))) * 180 / Math.PI;
+  };
+  assert.ok(Math.abs(ang(p[0], p[1], p[2]) - 120) < 1e-6);
+  assert.ok(Math.abs(ang(p[1], p[2], p[3]) - 120) < 1e-6);
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+  assert.ok(cross(p[0], p[1], p[2]) * cross(p[1], p[2], p[3]) < 0);
 });
 
 test('renderSVG 규칙 2.6: 고리에 속한 결합은 dz가 커도 항상 평범한 선', () => {

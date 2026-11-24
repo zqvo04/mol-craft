@@ -1,13 +1,17 @@
-const CACHE_NAME = 'mol-craft-shell-v2';
+const CACHE_NAME = 'mol-craft-shell-v3';
 const APP_SHELL = [
   './', './index.html', './offline.html', './manifest.webmanifest', './icons/mol-craft-icon.svg',
   './src/app.js', './src/io.js', './src/uff.js', './src/model.js', './src/snap.js', './src/params.js',
   './src/presets.js', './src/geom.js', './src/share.js', './src/sketch2d.js', './src/catalog.js',
   './src/catalog.css', './src/learning.js', './src/menu-select.js'
 ];
+const VIEWER_LIB = 'https://cdn.jsdelivr.net/npm/3dmol@3.0.0/build/3Dmol-min.js';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => Promise.all([
+    cache.addAll(APP_SHELL),
+    cache.add(VIEWER_LIB).catch(() => {}), // CDN 장애로 앱 셸 설치 전체가 실패하지 않게 한다.
+  ])).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {

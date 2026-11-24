@@ -483,3 +483,15 @@ test('slotKinds: 원자가가 완전히 찬 탄소는 안전장치 자리도 비
   const kinds = slotKinds(m, 1);
   assert.ok(kinds.every((k) => k.kind !== 'lonepair'), '탄소는 비공유 전자쌍을 가질 수 없다');
 });
+
+test('stability: PubChem 실측 3D 구조(카페인·아스피린·글루코스)를 불안정으로 오판정하지 않는다', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { parseSdf } = await import('../src/catalog.js');
+  for (const name of ['caffeine', 'aspirin', 'glucose']) {
+    const s = parseSdf(readFileSync(new URL(`./fixtures/${name}-pubchem3d.sdf`, import.meta.url), 'utf8'));
+    const m = createMolecule();
+    s.atoms.forEach((a) => addAtom(m, a.el, a.pos));
+    s.bonds.forEach((b) => addBond(m, b.i, b.j, b.order));
+    assert.deepEqual(stability(m).issues, [], `${name}에 오탐 경고가 있다`);
+  }
+});

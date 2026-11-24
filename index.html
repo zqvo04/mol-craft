@@ -9,6 +9,10 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/mol-craft-icon.svg">
 <title>mol-craft — 무료 분자 조립·응력 분석</title>
+<meta name="description" content="고등학교 화학부터 대학 유기화학까지, 분자를 직접 조립하고 2D·3D 구조·입체화학·결합 기하를 관찰하는 무료 학습 도구.">
+<meta property="og:title" content="mol-craft — 무료 분자 조립·응력 분석">
+<meta property="og:description" content="고등학교 화학부터 대학 유기화학까지, 분자를 직접 조립하고 2D·3D 구조·입체화학·결합 기하를 관찰하는 무료 학습 도구.">
+<meta property="og:type" content="website">
 <script>
   // 첫 페인트 전에 저장된 테마를 적용한다 — body 하단 스크립트까지 기다리면
   // 시스템은 라이트인데 사용자가 다크를 저장한 경우 한 프레임 라이트로
@@ -18,7 +22,7 @@
     if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
   })();
 </script>
-<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/3dmol@3.0.0/build/3Dmol-min.js" integrity="sha384-im1q6KeE/I9CzisqKyDaaKEOraUbZkj2RCRtmq8lpMuZJTjPhLB1xXd8ZzMhxX3R" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="src/catalog.css">
 <style>
   :root {
@@ -419,6 +423,9 @@
   #tools button, #palette button, #recent-palette button, #history-controls button {
     border: none; border-radius: 10px; background: transparent; box-shadow: none;
   }
+  #undo, #redo { min-width: 36px; min-height: 36px; font-size: 18px; line-height: 1; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) #tools button.tool.active { color: var(--fg); } }
+  :root[data-theme="light"] #tools button.tool.active { color: var(--fg); }
   #palette button, #recent-palette button { min-width: 32px; font-family: var(--font-mono); font-weight: 600; }
   #toolbar { gap: 8px; }
   #build-console, #selection-context {
@@ -718,8 +725,8 @@
     <button id="selection-delete" title="선택 삭제 (Delete)">삭제</button>
   </div>
   <div id="history-controls" aria-label="편집 이력">
-    <button id="undo" title="실행취소 (Ctrl+Z)">↶</button>
-    <button id="redo" title="재실행 (Ctrl+Shift+Z)" disabled>↷</button>
+    <button id="undo" title="실행취소 (Ctrl+Z)" aria-label="실행취소">↶</button>
+    <button id="redo" title="재실행 (Ctrl+Shift+Z)" aria-label="다시 실행" disabled>↷</button>
   </div>
 </div>
 <div id="toolhint"></div>

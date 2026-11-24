@@ -1,5 +1,5 @@
 import {
-  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom, valenceUsed, atomCharge, chargeValenceCap,
+  neighbors, bondOrderSum, bondBetween, addAtom, addBond, removeAtom, valenceUsed, atomCharge, chargeValenceCap, findRings,
 } from './model.js';
 import { MAX_VALENCE, EXPANDED_VALENCE, UFF_PARAMS } from './params.js';
 import { typeAtom, bondLength } from './uff.js';
@@ -7,6 +7,19 @@ import { sub, unit, scale, add, distance, angleDeg, cross, dot, norm } from './g
 
 export const SNAP_RADIUS_FACTOR = 1.6;
 export const ANGLE_TOLERANCE_DEG = 3;
+// 안정도 HUD는 '조립 실수'만 잡는다. 실제 분자(PubChem 3D)도 작용기·입체장애 때문에
+// UFF 평형각에서 수 °씩 벗어나므로, 3° 기준이면 아스피린·글루코스가 '불안정'으로 찍혔다.
+export const STABILITY_WARN_DEG = 12;
+export const STABILITY_DANGER_DEG = 25;
+
+// 3~5원 고리 안쪽 각은 혼성 평형각이 아니라 정다각형 내각(60°·90°·108°) 근처가 정상이다.
+// 같은 고리에 걸린 평면(sp²) 중심의 고리 밖 각은 (360° − 내각)/2가 된다(예: 5원 고리 126°).
+function ringInteriorIdeal(rings, a, c, b, theta0) {
+  const ring = rings.find((r) => r.length <= 5 && r.includes(a) && r.includes(c) && r.includes(b));
+  if (ring) return ((ring.length - 2) * 180) / ring.length;
+  const host = theta0 === 120 && rings.find((r) => r.length <= 5 && r.includes(c));
+  return host ? 180 - ((host.length - 2) * 90) / host.length : null;
+}
 
 // 배위수 -> VSEPR 이상 결합각. 비공유 전자쌍은 세지 않으므로
 // 실제 관측각(물 104.5°, 암모니아 106.7°)과는 약간 다르며, UFF theta0가 그 차이를 담당한다.
@@ -139,7 +152,7 @@ export function snapTarget(mol, moving, anchor) {
 // theta0는 UFF가 실제로 최소화하는 목표값이기도 해서, 이제 "VSEPR 만족"과 "최적화 수렴"이
 // 같은 뜻이 된다(물 104.51 · 암모니아 106.70 · 메탄 109.47 · 에틸렌 120 · SF6 90).
 // IDEAL_ANGLES는 그대로 둔다 — 새 원자를 어느 방향에 붙일지(openSlots)는 여전히 그 표가 맞다.
-export function vseprCheck(mol, centerIdx, toleranceDeg = ANGLE_TOLERANCE_DEG) {
+export function vseprCheck(mol, centerIdx, toleranceDeg = ANGLE_TOLERANCE_DEG, rings = findRings(mol)) {
   const nb = neighbors(mol, centerIdx);
   let theta0 = null;
   try { theta0 = UFF_PARAMS[typeAtom(mol, centerIdx)].theta0; }
@@ -150,7 +163,8 @@ export function vseprCheck(mol, centerIdx, toleranceDeg = ANGLE_TOLERANCE_DEG) {
     for (let b = a + 1; b < nb.length; b++) {
       const actual = angleDeg(mol.atoms[nb[a]].pos, mol.atoms[centerIdx].pos, mol.atoms[nb[b]].pos);
       // 180° 대향각은 어떤 형상에서도 허용한다(팔면체/삼각쌍뿔의 축 방향).
-      const candidates = theta0 === null ? [180] : [theta0, 180];
+      const ringIdeal = ringInteriorIdeal(rings, nb[a], centerIdx, nb[b], theta0);
+      const candidates = ringIdeal !== null ? [ringIdeal] : theta0 === null ? [180] : [theta0, 180];
       const best = candidates.reduce((p, c) =>
         Math.abs(actual - c) < Math.abs(actual - p) ? c : p);
       angles.push({ atoms: [nb[a], centerIdx, nb[b]], actual, ideal: best, deviation: Math.abs(actual - best) });
@@ -319,6 +333,7 @@ export function idealDirection(mol, anchor) {
 // 게이밍 HUD용 — 정밀 물리 판정이 아니라 "어디가 위험한지" 한눈에 보여주는 용도.
 export function stability(mol) {
   const issues = [];
+  const rings = findRings(mol);
   for (let i = 0; i < mol.atoms.length; i++) {
     const nb = neighbors(mol, i);
     if (nb.length === 0) continue;
@@ -345,12 +360,12 @@ export function stability(mol) {
       issues.push({ atom: i, level: 'warn', msg: `${el}${i} 원자가 부족(${deficit})` });
     }
     if (nb.length >= 2) {
-      const v = vseprCheck(mol, i);
+      const v = vseprCheck(mol, i, STABILITY_WARN_DEG, rings);
       if (!v.satisfied) {
         const worst = Math.max(...v.angles.map((x) => x.deviation));
         issues.push({
           atom: i,
-          level: worst > ANGLE_TOLERANCE_DEG * 3 ? 'danger' : 'warn',
+          level: worst > STABILITY_DANGER_DEG ? 'danger' : 'warn',
           msg: `${mol.atoms[i].el}${i} 각도 편차 ${worst.toFixed(0)}°`,
         });
       }

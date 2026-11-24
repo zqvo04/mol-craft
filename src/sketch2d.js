@@ -1,5 +1,6 @@
-import { neighbors, findRings } from './model.js';
+import { neighbors, findRings, bondBetween } from './model.js';
 import { implicitH, stability, formula } from './snap.js';
+import { assignRS } from './learning.js';
 
 export { findRings }; // model.js로 옮겼지만(aromatize와 공유) 기존 호출부·테스트 호환용 재수출.
 
@@ -184,13 +185,39 @@ const LABEL_PAD = 0.24; // 결합선을 라벨 근처에서 이만큼 당겨 잘
 const DBL_OFFSET = 0.09;
 const DBL_INSET = 0.14; // 두 번째/세 번째 선을 양끝에서 이만큼 짧게(평행선임을 분명히)
 
-// 규칙 2.6(쐐기/파선): z가 거의 같으면 임계값 미만으로 보고 평범한 선을 그린다.
-// 부호 규약은 이 앱 내부 정의다(3Dmol 카메라와 맞출 필요 없음 — 2D 골격식은 애초에
-// 3D 투영이 아니라 그래프 기반 개략도이므로 자체 규약이면 충분하다): dz > 0(대상 원자가
-// 앵커보다 화면 앞) -> 쐐기, dz < 0 -> 파선.
-const WEDGE_DZ_THRESHOLD = 0.15;
+// 규칙 2.6(쐐기/파선): 입체중심에서만 그린다(아래 stereoWedges). 쐐기=앞, 파선=뒤.
 const WEDGE_WIDTH = 0.16; // 쐐기/파선 넓은 쪽 폭(월드 단위, scale=42에서 약 6~7px)
 const DASH_COUNT = 5;
+
+// 규칙 2.6 본체: 쐐기/파선은 R/S가 정해지는 입체중심(assignRS 성공)에만, 중심당 결합 하나에 그린다.
+// 중심의 고리 밖 단일결합 중 말단 이웃을 우선 고르고, 2D 배치(H는 숨김=뒤쪽)에 쐐기를 얹은 가상
+// 배치의 R/S를 실제 3D의 R/S와 비교해 다르면 쐐기<->파선을 뒤집는다 => 그림이 실제 키랄성을 재현.
+// shortcut: 고리 안 입체중심(결합이 전부 고리 안)은 건너뛴다; 필요하면 고리 밖 치환기 선택 로직을 확장.
+function stereoWedges(mol, pos, rings) {
+  const out = new Map(); // "from-to" -> true(쐐기)/false(파선), from = 입체중심(뾰족한 쪽)
+  for (const c of pos.keys()) {
+    const rs = assignRS(mol, c);
+    if (!rs) continue;
+    const cands = neighbors(mol, c).filter((n) => pos.has(n) && ringInsideDir(rings, pos, c, n) === null
+      && bondBetween(mol, c, n)?.order === 1);
+    if (!cands.length) continue;
+    cands.sort((a, b) => heavyNeighbors(mol, a).length - heavyNeighbors(mol, b).length);
+    const n = cands[0];
+    const cp = pos.get(c);
+    const trial = (s) => {
+      const atoms = mol.atoms.map((a) => ({ ...a }));
+      for (const m of neighbors(mol, c)) {
+        const q = pos.get(m);
+        atoms[m].pos = q ? [q[0] - cp[0], q[1] - cp[1], m === n ? s : 0] : [0, 0, -s]; // 숨은 H는 쐐기 반대편
+      }
+      atoms[c].pos = [0, 0, 0];
+      return assignRS({ ...mol, atoms }, c)?.configuration;
+    };
+    const s = trial(1) === rs.configuration ? 1 : -1;
+    out.set(`${c}-${n}`, s > 0);
+  }
+  return out;
+}
 
 function ringCentroid(ring, pos) {
   return scale2(ring.reduce((s, a) => add2(s, pos.get(a)), [0, 0]), 1 / ring.length);
@@ -342,24 +369,24 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
     return h === 0 ? el : `${el}H${h > 1 ? h : ''}`;
   };
 
+  const wedges = stereoWedges(mol, pos, rings);
   let bondsSvg = '';
   for (const b of heavyBonds) {
     const p = pos.get(b.i), q = pos.get(b.j);
     const [cp, cq] = clipToLabels(p, q, hasLabel(b.i), hasLabel(b.j));
     const inside = ringInsideDir(rings, pos, b.i, b.j);
 
-    // 규칙 2.6: 고리 밖 단일결합만 대상 — z 변위(실제 3D 좌표)가 임계값 이상이면 쐐기/파선.
-    const dz = b.order === 1 && inside === null
-      ? mol.atoms[b.j].pos[2] - mol.atoms[b.i].pos[2]
-      : 0;
-    if (Math.abs(dz) >= WEDGE_DZ_THRESHOLD) {
-      if (dz > 0) {
-        const [t1, t2, t3] = wedgeTriangle(cp, cq);
+    // 규칙 2.6: 입체중심의 선택된 결합 하나만 쐐기/파선.
+    const fwd = wedges.get(`${b.i}-${b.j}`), rev = wedges.get(`${b.j}-${b.i}`);
+    const front = fwd ?? rev;
+    if (front !== undefined) {
+      if (front) {
+        const [t1, t2, t3] = fwd !== undefined ? wedgeTriangle(cp, cq) : wedgeTriangle(cq, cp);
         bondsSvg += `<polygon points="${sx(t1[0]).toFixed(1)},${sy(t1[1]).toFixed(1)} `
           + `${sx(t2[0]).toFixed(1)},${sy(t2[1]).toFixed(1)} `
           + `${sx(t3[0]).toFixed(1)},${sy(t3[1]).toFixed(1)}" fill="var(--fg)"/>`;
       } else {
-        for (const [a, c] of dashSegments(cp, cq)) {
+        for (const [a, c] of (fwd !== undefined ? dashSegments(cp, cq) : dashSegments(cq, cp))) {
           bondsSvg += `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
             + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`;
         }

@@ -563,7 +563,7 @@ $('charge-plus').addEventListener('click', () => {
 });
 $('charge-reset').addEventListener('click', () => changeSelectedCharge(0));
 
-const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: '비틀림', vdw: '반데르발스' };
+const TERM_LABEL = { bond: '결합 신축', angle: '결합각 굽힘', torsion: '비틀림', vdw: '반데르발스', inversion: '면외 굽힘' };
 
 // 총에너지 · 항별 막대 · 선택 측정값 · VSEPR 이상각 만족 여부를 패널에 반영한다.
 function updatePanels(e) {
@@ -1046,7 +1046,7 @@ function setTool(tool) {
 const TOOL_HINT = {
   view: '<b>탐색</b> — 드래그·휠로 분자를 관찰합니다. 구조는 바뀌지 않습니다.',
   select: '<b>선택</b> — 원자·결합을 고른 뒤 위 선택 바에서 전하·결합·복제·삭제를 편집합니다. 빈 곳 드래그로 여러 원자를 고를 수 있습니다.',
-  place: '<b>조립</b> — 앵커 원자를 조준하면 가능한 자리가 나타납니다. 초록 고스트를 클릭해 <b>' + state.element + '</b>을 붙이세요.',
+  place: '<b>조립</b> — 앵커 원자를 조준하면 가능한 자리가 나타납니다. 초록 고스트를 클릭해 <b>' + state.element + '</b>(을)를 붙이세요.',
   ring: '<b>구조 단위</b> — 앵커를 조준해 전체 미리보기를 보고 클릭합니다. <b>R</b> 키 또는 회전 버튼으로 배치를 바꿉니다.',
 };
 
