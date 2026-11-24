@@ -6,6 +6,9 @@ import { syncHydrogens } from './snap.js';
 
 const T = 0.63; // 정사면체 시작 좌표용 상수
 
+// 기초 모드(고교 화학) 분자 선택창에 보일 프리셋. 배좌·초원자가·생체유기 예제는 심화 전용.
+export const BASIC_PRESET_KEYS = ['methane', 'water', 'ammonia', 'ethylene', 'ethane'];
+
 export const PRESETS = {
   methane: {
     name: '메탄 CH₄',

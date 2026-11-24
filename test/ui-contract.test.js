@@ -96,3 +96,9 @@ test('기초 모드는 심화 도구만 숨기고 입체화학·결합 기하·�
   }
   assert.match(app, /localStorage\.setItem\('mol-craft-level'/);
 });
+
+test('기초 모드 프리셋은 고교 수준 분자만 포함한다', async () => {
+  const { BASIC_PRESET_KEYS, PRESETS } = await import('../src/presets.js');
+  assert.deepEqual(BASIC_PRESET_KEYS, ['methane', 'water', 'ammonia', 'ethylene', 'ethane']);
+  for (const key of BASIC_PRESET_KEYS) assert.ok(PRESETS[key], `${key} 프리셋이 존재해야 한다`);
+});

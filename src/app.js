@@ -8,7 +8,7 @@ import {
   geometryName, bondDistanceOk, cycleBondOrder, slotKinds, substituteHydrogen,
 } from './snap.js';
 import { MAX_VALENCE, CPK_COLOR } from './params.js';
-import { loadPreset, PRESETS, RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, validateStructureAttachment } from './presets.js';
+import { loadPreset, PRESETS, BASIC_PRESET_KEYS, RING_TEMPLATES, STRUCTURE_LIBRARY, computeRingPlacement, insertRingTemplate, validateStructureAttachment } from './presets.js';
 import { add, scale, sub, rotateAround } from './geom.js';
 import { putShared, getShared } from './share.js';
 import { renderSVG, layout, nextChainDir } from './sketch2d.js';
@@ -1122,8 +1122,12 @@ const LIBRARY_GROUPS = [
   ['ring', '탄소 고리'], ['heteroring', '헤테로고리'], ['nucleobase', '핵염기'], ['functional', '기능기'],
 ];
 
+// 기초 모드에서는 탄소 고리와 기본 기능기만 보인다(헤테로고리·핵염기는 심화 전용).
+const BASIC_LIBRARY_GROUPS = new Set(['ring', 'functional']);
+const isAdvancedLevel = () => document.documentElement.dataset.level === 'advanced';
+
 function renderStructureLibrary() {
-  const sections = LIBRARY_GROUPS.map(([group, label]) => {
+  const sections = LIBRARY_GROUPS.filter(([group]) => isAdvancedLevel() || BASIC_LIBRARY_GROUPS.has(group)).map(([group, label]) => {
     const units = STRUCTURE_LIBRARY.filter((unit) => unit.group === group);
     if (!units.length) return '';
     return `<div class="structure-library-group"><h3>${label}</h3><div class="structure-grid">${units.map((unit) => {
@@ -1988,13 +1992,15 @@ function applyLevel(level) {
   $('level-toggle').textContent = advanced ? '심화 모드' : '기초 모드';
   // 기초 모드의 분석 탭은 측정·VSEPR만 남으므로 학습 노트를 기본으로 연다.
   if (!advanced) setInspectorTab('learning');
+  renderStructureLibrary();
+  renderPresetOptions();
+  presetMenu.refresh();
   // 기초 모드에서는 색상 선택이 숨겨지므로, 응력 히트맵에 갇히지 않게 원소 색으로 되돌린다.
   if (!advanced && $('colorby').value !== 'element') {
     $('colorby').value = 'element';
     $('colorby').dispatchEvent(new Event('change'));
   }
 }
-applyLevel(document.documentElement.dataset.level);
 $('level-toggle').addEventListener('click', () => {
   const next = document.documentElement.dataset.level === 'advanced' ? 'basic' : 'advanced';
   try { localStorage.setItem('mol-craft-level', next); } catch { /* 저장 불가여도 이번 방문에는 적용 */ }
@@ -2004,8 +2010,15 @@ $('level-toggle').addEventListener('click', () => {
 
 setTool('view');
 
-$('preset').innerHTML = Object.entries(PRESETS)
-  .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+// 기초 모드에서는 고교 수준 프리셋만 보인다. 이미 불러온 심화 프리셋은 목록에 남겨 라벨이 비지 않게 한다.
+function renderPresetOptions() {
+  const current = $('preset').value;
+  $('preset').innerHTML = Object.entries(PRESETS)
+    .filter(([k]) => isAdvancedLevel() || BASIC_PRESET_KEYS.includes(k) || k === current)
+    .map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+  if (current) $('preset').value = current;
+}
+renderPresetOptions();
 $('preset').onchange = (ev) => {
   state.mol = loadPreset(ev.target.value);
   state.selection = [];
@@ -2019,7 +2032,8 @@ $('preset').onchange = (ev) => {
   const note = PRESETS[ev.target.value].note;
   if (note) toast(note);
 };
-createMenuSelect($('preset'));
+const presetMenu = createMenuSelect($('preset'));
+applyLevel(document.documentElement.dataset.level);
 
 // 카탈로그에서 PubChem SDF 구조를 불러오면 기존 조립·분석 상태로 교체한다.
 // 현재 UFF 지원 원소만 catalog.js에서 이 이벤트를 보낼 수 있어 분석 경로는 그대로 안전하다.
