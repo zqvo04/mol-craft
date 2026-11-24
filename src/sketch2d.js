@@ -167,6 +167,25 @@ export function layout(mol) {
     if (unplaced === undefined) break;
     pos.set(unplaced, nextFreeSpot(pos));
   }
+  // 교재식 방향: 사슬의 주축(PCA)을 수평으로 눕힌다(부탄이 계단 Z가 아니라 /\/\ 로 보이게).
+  // 회전은 강체 회전이라 키랄성은 그대로이고, 쐐기 계산(stereoWedges)은 이 최종 좌표를 쓴다.
+  // shortcut: 고리 분자는 고리가 기울어 보이지 않게 회전하지 않는다; 필요하면 고리 정렬 규칙 추가.
+  if (!rings.length) {
+    const c = centroid(pos);
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const p of pos.values()) { const x = p[0] - c[0], y = p[1] - c[1]; sxx += x * x; syy += y * y; sxy += x * y; }
+    const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    // 사슬 결합각은 모두 같은 값 mod 60°이므로, 결합이 수평과 ±30°가 되게 가장 가까운 쪽으로 미세 조정한다.
+    const b = mol.bonds.find((x) => pos.has(x.i) && pos.has(x.j));
+    let rot = -theta;
+    if (b) {
+      const [p, q] = [pos.get(b.i), pos.get(b.j)];
+      const phi = (Math.atan2(q[1] - p[1], q[0] - p[0]) + rot) % (Math.PI / 3);
+      const d = (Math.PI / 6 - phi) % (Math.PI / 3);
+      rot += d > Math.PI / 6 ? d - Math.PI / 3 : d < -Math.PI / 6 ? d + Math.PI / 3 : d;
+    }
+    for (const [i, p] of pos) pos.set(i, rotate2(p, rot));
+  }
   return pos;
 }
 
@@ -192,22 +211,39 @@ const DASH_COUNT = 5;
 // 규칙 2.6 본체: 쐐기/파선은 R/S가 정해지는 입체중심(assignRS 성공)에만, 중심당 결합 하나에 그린다.
 // 중심의 고리 밖 단일결합 중 말단 이웃을 우선 고르고, 2D 배치(H는 숨김=뒤쪽)에 쐐기를 얹은 가상
 // 배치의 R/S를 실제 3D의 R/S와 비교해 다르면 쐐기<->파선을 뒤집는다 => 그림이 실제 키랄성을 재현.
-// shortcut: 고리 안 입체중심(결합이 전부 고리 안)은 건너뛴다; 필요하면 고리 밖 치환기 선택 로직을 확장.
+// 고리 안 입체중심: (a) 고리 밖 단일결합 우선, (b) 없으면 명시적 H를 짧은 결합(0.5)으로 직접 그려 H에
+// 쐐기/파선을 건다(결합각 가장 넓은 빈 틈의 이등분선 방향), (c) H도 없으면 건너뛴다.
+// 두 입체중심 사이 결합은 먼저 잡은 쪽에서만 쐐기로 그린다(양쪽에서 중복 쐐기 방지).
+// shortcut: 고리 안 H 위치는 이웃 결합각의 가장 큰 틈 기준이라 융합 고리 다리머리에서는 고리 안쪽에 놓일 수 있다.
 function stereoWedges(mol, pos, rings) {
   const out = new Map(); // "from-to" -> true(쐐기)/false(파선), from = 입체중심(뾰족한 쪽)
+  const hs = new Map(); // 직접 그리는 H 원자 -> { c: 입체중심, p: 좌표 }
   for (const c of pos.keys()) {
     const rs = assignRS(mol, c);
     if (!rs) continue;
-    const cands = neighbors(mol, c).filter((n) => pos.has(n) && ringInsideDir(rings, pos, c, n) === null
-      && bondBetween(mol, c, n)?.order === 1);
-    if (!cands.length) continue;
-    cands.sort((a, b) => heavyNeighbors(mol, a).length - heavyNeighbors(mol, b).length);
-    const n = cands[0];
     const cp = pos.get(c);
+    const nb = neighbors(mol, c);
+    const cands = nb.filter((n) => pos.has(n) && ringInsideDir(rings, pos, c, n) === null
+      && bondBetween(mol, c, n)?.order === 1 && !out.has(`${n}-${c}`));
+    cands.sort((a, b) => heavyNeighbors(mol, a).length - heavyNeighbors(mol, b).length);
+    let n = cands[0], hp = null;
+    if (n === undefined) {
+      n = nb.find((m) => mol.atoms[m].el === 'H');
+      if (n === undefined) continue;
+      const angs = nb.filter((m) => pos.has(m)).map((m) => Math.atan2(pos.get(m)[1] - cp[1], pos.get(m)[0] - cp[0]))
+        .sort((x, y) => x - y);
+      let best = -1, mid = 0;
+      angs.forEach((x, k) => {
+        const next = k + 1 < angs.length ? angs[k + 1] : angs[0] + 2 * Math.PI;
+        if (next - x > best) { best = next - x; mid = x + (next - x) / 2; }
+      });
+      hp = add2(cp, [0.5 * Math.cos(mid), 0.5 * Math.sin(mid)]);
+      hs.set(n, { c, p: hp });
+    }
     const trial = (s) => {
       const atoms = mol.atoms.map((a) => ({ ...a }));
-      for (const m of neighbors(mol, c)) {
-        const q = pos.get(m);
+      for (const m of nb) {
+        const q = pos.get(m) ?? (m === n ? hp : null);
         atoms[m].pos = q ? [q[0] - cp[0], q[1] - cp[1], m === n ? s : 0] : [0, 0, -s]; // 숨은 H는 쐐기 반대편
       }
       atoms[c].pos = [0, 0, 0];
@@ -216,7 +252,7 @@ function stereoWedges(mol, pos, rings) {
     const s = trial(1) === rs.configuration ? 1 : -1;
     out.set(`${c}-${n}`, s > 0);
   }
-  return out;
+  return { out, hs };
 }
 
 function ringCentroid(ring, pos) {
@@ -348,7 +384,8 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
     ? add2(pos.get(ghost.anchorIdx), scale2(ghost.dir ?? nextChainDir(mol, ghost.anchorIdx, pos, 1), BOND_LEN))
     : null;
 
-  const pts = [...pos.values()];
+  const { out: wedges, hs: hDraw } = stereoWedges(mol, pos, rings);
+  const pts = [...pos.values(), ...[...hDraw.values()].map((x) => x.p)];
   const minX = Math.min(...pts.map((p) => p[0])) - 1;
   const maxX = Math.max(...pts.map((p) => p[0])) + 1;
   const minY = Math.min(...pts.map((p) => p[1])) - 1;
@@ -357,6 +394,17 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
   const sx = (x) => (x - minX) * scale;
   const sy = (y) => (maxY - y) * scale; // SVG y축은 아래로 증가하므로 뒤집는다
 
+  // 앵커(p, 뾰족한 쪽)에서 q 쪽으로 쐐기(front) 또는 파선 SVG.
+  const wedgeSvg = (front, p, q) => {
+    if (front) {
+      const [t1, t2, t3] = wedgeTriangle(p, q);
+      return `<polygon points="${sx(t1[0]).toFixed(1)},${sy(t1[1]).toFixed(1)} `
+        + `${sx(t2[0]).toFixed(1)},${sy(t2[1]).toFixed(1)} `
+        + `${sx(t3[0]).toFixed(1)},${sy(t3[1]).toFixed(1)}" fill="var(--fg)"/>`;
+    }
+    return dashSegments(p, q).map(([a, c]) => `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
+      + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`).join('');
+  };
   const hasLabel = (i) => mol.atoms[i].el !== 'C';
   const labelText = (i) => {
     const el = mol.atoms[i].el;
@@ -369,7 +417,6 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
     return h === 0 ? el : `${el}H${h > 1 ? h : ''}`;
   };
 
-  const wedges = stereoWedges(mol, pos, rings);
   let bondsSvg = '';
   for (const b of heavyBonds) {
     const p = pos.get(b.i), q = pos.get(b.j);
@@ -380,17 +427,7 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
     const fwd = wedges.get(`${b.i}-${b.j}`), rev = wedges.get(`${b.j}-${b.i}`);
     const front = fwd ?? rev;
     if (front !== undefined) {
-      if (front) {
-        const [t1, t2, t3] = fwd !== undefined ? wedgeTriangle(cp, cq) : wedgeTriangle(cq, cp);
-        bondsSvg += `<polygon points="${sx(t1[0]).toFixed(1)},${sy(t1[1]).toFixed(1)} `
-          + `${sx(t2[0]).toFixed(1)},${sy(t2[1]).toFixed(1)} `
-          + `${sx(t3[0]).toFixed(1)},${sy(t3[1]).toFixed(1)}" fill="var(--fg)"/>`;
-      } else {
-        for (const [a, c] of (fwd !== undefined ? dashSegments(cp, cq) : dashSegments(cq, cp))) {
-          bondsSvg += `<line x1="${sx(a[0]).toFixed(1)}" y1="${sy(a[1]).toFixed(1)}" `
-            + `x2="${sx(c[0]).toFixed(1)}" y2="${sy(c[1]).toFixed(1)}" stroke="var(--fg)" stroke-width="1.6"/>`;
-        }
-      }
+      bondsSvg += wedgeSvg(front, fwd !== undefined ? cp : cq, fwd !== undefined ? cq : cp);
       continue;
     }
 
@@ -400,7 +437,16 @@ export function renderSVG(mol, { scale = 42, ghost = null, bondPreview = null, s
     }
   }
 
+  // 고리 입체중심의 명시적 H: 짧은 쐐기/파선 + "H" 라벨.
   let labelsSvg = '';
+  for (const [h, { c, p }] of hDraw) {
+    const [a, b] = clipToLabels(pos.get(c), p, hasLabel(c), true);
+    bondsSvg += wedgeSvg(wedges.get(`${c}-${h}`), a, b);
+    const [x, y] = [sx(p[0]), sy(p[1])];
+    labelsSvg += `<rect x="${(x - 8).toFixed(1)}" y="${(y - 10).toFixed(1)}" width="16" height="20" fill="var(--surface)"/>`
+      + `<text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle" font-size="15" `
+      + 'fill="var(--fg)" font-family="sans-serif">H</text>';
+  }
   for (const i of pos.keys()) {
     if (!hasLabel(i)) continue;
     const [x, y] = [sx(pos.get(i)[0]), sy(pos.get(i)[1])];

@@ -317,3 +317,64 @@ test('renderSVG: 무거운 원자가 2개 이상이면 종전 골격식 그대�
   assert.ok(!svg.includes('>H<'), '골격식은 탄소의 H를 그리지 않는다');
   assert.equal((svg.match(/<line/g) ?? []).length, 1);
 });
+
+// ---- 교재식 방향 + 고리 입체중심 ----------------------------------------------------
+
+test('layout: 부탄·헥세인은 수평 지그재그(모든 결합이 수평과 ±30°)', () => {
+  const hexane = createMolecule();
+  for (let i = 0; i < 6; i++) addAtom(hexane, 'C', [i, 0, 0]);
+  for (let i = 0; i < 5; i++) addBond(hexane, i, i + 1);
+  for (const [key, m] of [['butane', loadPreset('butane')], ['hexane', hexane]]) {
+    const pos = layout(m);
+    const heavy = m.bonds.filter((b) => pos.has(b.i) && pos.has(b.j));
+    assert.ok(heavy.length >= 3, key);
+    for (const b of heavy) {
+      const [p, q] = [pos.get(b.i), pos.get(b.j)];
+      const a = Math.abs(Math.atan2(q[1] - p[1], q[0] - p[0]) * 180 / Math.PI) % 180;
+      assert.ok(Math.abs(a - 30) < 1e-6 || Math.abs(a - 150) < 1e-6, `${key} ${a}`);
+    }
+  }
+});
+
+// 6원 고리 + 고리 탄소(0)에 CH3·H, 이웃 1번에 OH를 단 입체중심. z를 뒤집으면 거울상.
+function ringStereo(zSign, { methyl = true } = {}) {
+  const m = createMolecule();
+  const hex = (i) => [Math.cos(i * Math.PI / 3), Math.sin(i * Math.PI / 3), 0];
+  for (let i = 0; i < 6; i++) addAtom(m, 'C', hex(i));
+  for (let i = 0; i < 6; i++) addBond(m, i, (i + 1) % 6);
+  const add = (el, pos, to) => { addAtom(m, el, pos); addBond(m, to, m.atoms.length - 1); };
+  add('O', [0.5, 1.5, 0], 1);
+  if (methyl) add('C', [1.8, 0, 0.8 * zSign], 0);
+  add('H', [1.8, 0, -0.8 * zSign], 0);
+  return m;
+}
+const hasH = (svg) => svg.includes('>H</text>');
+
+test('renderSVG 고리 입체중심: 고리 밖 CH3가 있으면 그 결합에 쐐기/파선(H는 안 그림), 거울상이면 뒤집힌다', () => {
+  const [a, b] = [renderSVG(ringStereo(1)), renderSVG(ringStereo(-1))];
+  assert.ok(!hasH(a) && !hasH(b));
+  assert.equal((a.match(/<polygon/g) || []).length + (b.match(/<polygon/g) || []).length, 1);
+});
+
+// 데칼린 골격(고리 0-1-2-3-4-5, 0-5-6-7-8-9) + C1에 OH + 다리머리 C0에 H(위/아래 = z).
+function decalin(zSign) {
+  const m = createMolecule();
+  const P = [[0, 0.5], [0, -0.5], [0.87, -1], [1.73, -0.5], [1.73, 0.5], [0.87, 1],
+    [-0.87, 1], [-1.73, 0.5], [-1.73, -0.5], [-0.87, -1]]; // 0=(0,.5) 5 는 다리머리쌍 아님: 아래서 결합으로 정의
+  P.forEach(([x, y]) => addAtom(m, 'C', [x, y, 0]));
+  for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0], [0, 6], [6, 7], [7, 8], [8, 9], [9, 1]]) addBond(m, i, j);
+  const add = (el, pos, to) => { addAtom(m, el, pos); addBond(m, to, m.atoms.length - 1); };
+  add('O', [0.9, -2, 0], 2);
+  add('H', [0, 0.5, zSign], 0);
+  add('H', [0, -0.5, -zSign], 1);
+  return m;
+}
+
+test('renderSVG 고리 입체중심: 결합이 전부 고리 안이면 명시적 H를 쐐기/파선으로 그린다, 거울상이면 뒤집힌다', () => {
+  const [a, b] = [renderSVG(decalin(1)), renderSVG(decalin(-1))];
+  // 다리머리 두 곳(C0, C1)의 H가 그려진다. 쐐기(polygon) 수가 거울상에서 정확히 반대가 된다.
+  for (const svg of [a, b]) assert.equal((svg.match(/>H<\/text>/g) || []).length, 2);
+  const w = (svg) => (svg.match(/<polygon/g) || []).length;
+  assert.equal(w(a) + w(b), 2); // 두 중심 x 두 거울상 = 쐐기 2개, 파선 2개
+  assert.notEqual(a, b);
+});
